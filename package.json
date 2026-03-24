@@ -1,0 +1,39 @@
+{
+  "name": "spotify-mcp",
+  "version": "1.0.0",
+  "description": "Spotify MCP server for Claude Code — control playback, search, manage playlists, and more through natural language.",
+  "main": "server.js",
+  "bin": {
+    "spotify-mcp": "./server.js",
+    "spotify-mcp-auth": "./auth-setup.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "auth": "node auth-setup.js"
+  },
+  "keywords": [
+    "spotify",
+    "mcp",
+    "claude",
+    "claude-code",
+    "model-context-protocol",
+    "ai",
+    "music"
+  ],
+  "author": "Kace Burnette",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kaceburnette/spotify-mcp.git"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "express": "^5.2.1",
+    "open": "^11.0.0",
+    "spotify-web-api-node": "^5.0.2"
+  }
+}
