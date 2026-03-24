@@ -119,7 +119,7 @@ server.tool('get_current_track', 'Get the currently playing track', {}, async ()
   return { content: [{ type: 'text', text: JSON.stringify(formatPlaybackState(result.body), null, 2) }] };
 });
 
-server.tool('play', 'Resume playback or play a specific track/album/playlist', {
+server.tool('play', 'Resume playback or play a specific track/album/playlist. Single tracks auto-queue similar songs so music keeps flowing.', {
   uri: z.string().optional().describe('Spotify URI to play (track, album, playlist). Leave empty to resume.'),
   device_id: z.string().optional().describe('Device ID to play on'),
 }, async ({ uri, device_id }) => {
@@ -133,6 +133,20 @@ server.tool('play', 'Resume playback or play a specific track/album/playlist', {
     }
   }
   await withAuth(() => spotify.play(options));
+
+  // When playing a single track, auto-queue recommendations so music keeps going
+  if (uri && uri.includes(':track:')) {
+    try {
+      const trackId = uri.split(':').pop();
+      const recs = await withAuth(() => spotify.getRecommendations({ seed_tracks: [trackId], limit: 20 }));
+      for (const track of recs.body.tracks) {
+        await withAuth(() => spotify.addToQueue(track.uri));
+      }
+    } catch (_) {
+      // Non-critical — music still plays, just won't auto-continue
+    }
+  }
+
   return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed playback' }] };
 });
 
