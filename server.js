@@ -134,16 +134,41 @@ server.tool('play', 'Resume playback or play a specific track/album/playlist. Si
   }
   await withAuth(() => spotify.play(options));
 
-  // When playing a single track, auto-queue recommendations so music keeps going
+  // Auto-queue recommendations so music keeps flowing
+  // Works for: playing a single track, or resuming (grabs current track as seed)
+  let seedTrackId = null;
   if (uri && uri.includes(':track:')) {
+    seedTrackId = uri.split(':').pop();
+  } else if (!uri) {
+    // Resuming — check if current context is a single track (no album/playlist)
     try {
-      const trackId = uri.split(':').pop();
-      const recs = await withAuth(() => spotify.getRecommendations({ seed_tracks: [trackId], limit: 20 }));
+      await new Promise(r => setTimeout(r, 500));
+      const state = await withAuth(() => spotify.getMyCurrentPlaybackState());
+      if (state.body?.item && !state.body.context) {
+        seedTrackId = state.body.item.id;
+      }
+    } catch (_) {}
+  }
+
+  if (seedTrackId) {
+    try {
+      // Give Spotify a moment to register playback before queueing
+      if (uri) await new Promise(r => setTimeout(r, 1000));
+      const recs = await withAuth(() => spotify.getRecommendations({ seed_tracks: [seedTrackId], limit: 20 }));
+      let queued = 0;
       for (const track of recs.body.tracks) {
-        await withAuth(() => spotify.addToQueue(track.uri));
+        try {
+          await withAuth(() => spotify.addToQueue(track.uri));
+          queued++;
+        } catch (_) {
+          // Individual queue add failed, keep going
+        }
+      }
+      if (queued > 0) {
+        return { content: [{ type: 'text', text: uri ? `Playing: ${uri} (${queued} similar tracks queued)` : `Resumed playback (${queued} similar tracks queued)` }] };
       }
     } catch (_) {
-      // Non-critical — music still plays, just won't auto-continue
+      // Recommendations failed — music still plays
     }
   }
 
