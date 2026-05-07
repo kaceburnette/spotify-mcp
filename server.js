@@ -625,6 +625,92 @@ server.tool('get_album', 'Get album details and track list.', { album_id: z.stri
 // volume-based effects that simulate DJ techniques, not real mixing.
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── DJ Style Profiles ─────────────────────────────────────────────────────────
+// Each style models a real headliner's approach: track selection keywords per
+// phase, preferred transition styles, energy arc speed, and vibe description.
+// Claude picks tracks matching these keywords and fires transitions in the style's
+// character. Add your own by following the same shape.
+
+const DJ_STYLES = {
+  fisher: {
+    name: 'FISHER',
+    description: 'Tech house. Filthy basslines, samples, crowd control. Loses It every time.',
+    arc: 'aggressive', // fast ramp to peak
+    phases: {
+      'warm up': ['tech house groove minimal', 'warehouse tech house deep'],
+      'build':   ['tech house peak hour driving', 'hard tech house club'],
+      'peak':    ['FISHER tech house rave', 'tech house peak hard dirty bass'],
+    },
+    transitions: ['cut', 'stutter', 'spinback', 'cut'], // Fisher is all hard cuts and spinbacks
+  },
+  garrix: {
+    name: 'Martin Garrix',
+    description: 'Big room EDM. Festival anthems, euphoric builds, drops that hit 80,000 people at once.',
+    arc: 'euphoric',
+    phases: {
+      'warm up': ['progressive house melodic build', 'electro house festival warm up'],
+      'build':   ['big room house festival energy', 'progressive electro house drop'],
+      'peak':    ['Martin Garrix big room festival anthem', 'EDM mainstage anthem drop'],
+    },
+    transitions: ['swell', 'swell', 'fade', 'swell'], // massive swells before every drop
+  },
+  james_hype: {
+    name: 'James Hype',
+    description: 'UK tech house. Hip hop blends, vocal cuts, Ferrari energy. Makes everyone lose their mind.',
+    arc: 'groove',
+    phases: {
+      'warm up': ['UK tech house groove funky', 'tech house vocal house deep'],
+      'build':   ['UK tech house hip hop blend vocal', 'tech house peak vocal chop'],
+      'peak':    ['James Hype tech house peak hour', 'tech house hip hop rave vocal'],
+    },
+    transitions: ['cut', 'echo', 'cut', 'stutter'], // quick cuts with echo vocal chops
+  },
+  afterlife: {
+    name: 'Afterlife / Tale Of Us',
+    description: 'Melodic techno. Emotional arcs, cinematic builds, Ibiza at sunset. Anyma energy.',
+    arc: 'cinematic',
+    phases: {
+      'warm up': ['Afterlife melodic techno deep opening', 'Tale Of Us melodic atmospheric'],
+      'build':   ['Anyma melodic techno progressive', 'Afterlife label progressive build'],
+      'peak':    ['Anyma peak techno Afterlife hard', 'melodic techno peak Ibiza'],
+    },
+    transitions: ['fade', 'swell', 'echo', 'fade'], // smooth and emotional
+  },
+  carl_cox: {
+    name: 'Carl Cox',
+    description: 'Classic techno. Underground, relentless, three-deck mastery. No compromise.',
+    arc: 'relentless',
+    phases: {
+      'warm up': ['classic techno underground minimal', 'deep techno warehouse opening'],
+      'build':   ['techno hard industrial driving', 'underground techno peak'],
+      'peak':    ['Carl Cox techno hard rave', 'peak techno industrial underground hard'],
+    },
+    transitions: ['cut', 'cut', 'stutter', 'cut'], // surgical hard cuts, no sentimentality
+  },
+  solomun: {
+    name: 'Solomun',
+    description: 'Deep melodic house. Slow burns, hypnotic grooves, Pacha Ibiza. Patience pays.',
+    arc: 'hypnotic',
+    phases: {
+      'warm up': ['Solomun deep house melodic groove', 'deep house melodic hypnotic'],
+      'build':   ['melodic house progressive deep groove', 'Solomun style deep tech house'],
+      'peak':    ['Solomun peak hour deep melodic house', 'deep house peak Ibiza groove'],
+    },
+    transitions: ['fade', 'fade', 'swell', 'fade'], // long blends, never rushes
+  },
+  charlotte: {
+    name: 'Charlotte de Witte',
+    description: 'Dark minimal techno. Industrial, relentless, no mercy. Doppler is the weapon.',
+    arc: 'brutal',
+    phases: {
+      'warm up': ['dark techno minimal industrial', 'dark techno warehouse deep'],
+      'build':   ['hard dark techno industrial driving', 'Charlotte de Witte dark techno'],
+      'peak':    ['dark techno peak industrial hard rave', 'hard techno peak minimal brutal'],
+    },
+    transitions: ['cut', 'stutter', 'cut', 'spinback'], // brutally precise
+  },
+};
+
 async function setVol(v) {
   return spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.max(0, Math.min(100, Math.round(v))) } }).catch(() => {});
 }
@@ -711,7 +797,8 @@ const djLive = {
   active: false, genre: null, phase: 'peak',
   pool: [], usedUris: new Set(),
   lastTransition: 0, transitioning: false, timer: null,
-  currentTrackId: null, cutPoint: 0, // per-track random cut point
+  currentTrackId: null, cutPoint: 0,
+  styleTransitions: null, // set by dj_set when a style profile is used
 };
 
 function stopLiveDJ() {
@@ -770,7 +857,7 @@ async function startLiveDJ(genre, phase, pool) {
       djLive.transitioning  = true;
 
       const vol    = player.device?.volume_percent ?? 80;
-      const styles = PHASE_STYLES[djLive.phase] ?? ['fade', 'cut'];
+      const styles = djLive.styleTransitions ?? PHASE_STYLES[djLive.phase] ?? ['fade', 'cut'];
       const style  = styles[Math.floor(Math.random() * styles.length)];
       await performTransition(style, vol, next.uri);
     } catch (_) {}
@@ -811,14 +898,18 @@ server.tool('cut_early',
 );
 
 server.tool('dj_set',
-  'Build a DJ set with a warm up → build → peak arc. live=true enables the live DJ engine: auto-transitions fire between every track with style matching the phase (warm up=fade/swell, build=swell/cut, peak=stutter/echo/cut). No pre-queueing in live mode — the engine drives everything. Call stop_dj to end the session.',
+  'Build a full DJ set. style = DJ style profile (fisher, garrix, james_hype, afterlife, carl_cox, solomun, charlotte) — overrides genre with that DJ\'s track selection and transition character. live=true runs the autonomous engine with auto-transitions. Say "start a DJ set, Fisher style" or "give me a James Hype set, live" and this handles everything.',
   {
-    genre:          z.string().describe('Genre or vibe: "techno", "house", "hip hop", "trance", "drum and bass", etc.'),
+    genre:          z.string().default('house').describe('Genre or vibe. Ignored if style is set.'),
+    style:          z.enum(['fisher','garrix','james_hype','afterlife','carl_cox','solomun','charlotte']).optional().describe('DJ style profile. Picks tracks and transitions matching that DJ\'s character.'),
     tracks:         z.number().min(4).max(20).default(10).describe('Total tracks in the set'),
     include_outro:  z.boolean().default(false).describe('Add a cool-down phase after peak'),
     live:           z.boolean().default(false).describe('Enable live DJ engine — auto-transitions between every track. Only use when user explicitly requests a live/automatic DJ set.'),
   },
-  async ({ genre, tracks, include_outro, live }) => {
+  async ({ genre, style, tracks, include_outro, live }) => {
+    // Apply DJ style profile if provided
+    const profile = style ? DJ_STYLES[style] : null;
+
     // Pull user's top artists to seed personal taste into the set
     let topArtistNames = [];
     try {
@@ -826,14 +917,26 @@ server.tool('dj_set',
       topArtistNames = (ta?.items ?? []).map(a => a.name).slice(0, 5);
     } catch (_) {}
 
-    const phases = [
+    const phases = profile ? [
+      { label: 'warm up', queries: profile.phases['warm up'], share: 0.20 },
+      { label: 'build',   queries: profile.phases['build'],   share: 0.35 },
+      { label: 'peak',    queries: profile.phases['peak'],    share: include_outro ? 0.30 : 0.45 },
+    ] : [
       { label: 'warm up', queries: [`${genre} warm up deep opening melodic`, `${genre} intro opening set warm`],           share: 0.20 },
       { label: 'build',   queries: [`${genre} progressive build energy`,       `${genre} building tension peak`],           share: 0.35 },
       { label: 'peak',    queries: [`${genre} peak hour hard intense rave`,    `${genre} peak time club hard floor`],       share: include_outro ? 0.30 : 0.45 },
     ];
     if (include_outro) phases.push(
-      { label: 'outro',   queries: [`${genre} cool down closing outro`,        `${genre} end of night closing set`],        share: 0.15 }
+      { label: 'outro', queries: profile
+          ? [`${profile.phases['warm up'][0]} closing outro`, `deep closing outro set`]
+          : [`${genre} cool down closing outro`, `${genre} end of night closing set`],
+        share: 0.15 }
     );
+
+    // If a style profile is set, override the live engine's transition pool for this set
+    if (profile && live) {
+      djLive.styleTransitions = profile.transitions;
+    }
 
     const allTracks = []; // { phase, track } — full set in order
     const usedUris  = new Set();
@@ -909,7 +1012,7 @@ server.tool('dj_set',
       }
     }
 
-    return { content: [{ type: 'text', text: JSON.stringify({ set_built: true, live_dj: djLive.active, genre, total_tracks: setList.length, personal_seeds: topArtistNames, tracklist: setList }, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({ set_built: true, live_dj: djLive.active, dj_style: profile?.name ?? null, genre, total_tracks: setList.length, personal_seeds: topArtistNames, tracklist: setList }, null, 2) }] };
   }
 );
 

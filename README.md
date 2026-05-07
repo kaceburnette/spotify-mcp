@@ -14,12 +14,6 @@ Every Claude Code session starts with **Back in Black**. You can change it.
 - **Fully configurable** — startup song, startup mood, per-mood playlist keywords, artist/track blacklist. All in `.spotify-prefs.json`.
 - **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024. Uses top tracks, artist catalogs, and playlist search only.
 
-### DJ Mode (optional)
-
-Say **"start a DJ set"** to activate. Claude builds a warm up → build → peak arc, picks tracks, and fires transitions between them. This is a separate feature — it does nothing unless you ask for it. Normal vibe detection and playback work completely independently.
-
-DJ mode is volume-effect based (fade, cut, stutter, echo, swell, spinback). Spotify's API doesn't expose the audio stream, so true audio crossfade isn't possible through this MCP. What you get is the best approximation available through remote control.
-
 ---
 
 ## Requirements
@@ -126,7 +120,6 @@ You can also update config by telling Claude:
 - *"set my startup mood to focus"*
 - *"change my startup song to [song]"*
 - *"turn off the startup song"*
-- *"disable the startup song"*
 
 ---
 
@@ -185,7 +178,58 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 
 ---
 
+## DJ Mode
+
+DJ Mode is a separate, opt-in feature. Normal vibe detection and playback are completely unaffected unless you explicitly ask for a DJ set.
+
+**Just say:**
+- *"start a DJ set"*
+- *"give me a Fisher set, live"*
+- *"run a James Hype style set"*
+- *"stop DJ"*
+
+That's it. Claude builds the set, fires the transitions, and keeps it going. No configuration needed.
+
+### How it works
+
+Claude builds a warm up → build → peak arc, pulls tracks matching each phase's energy, and fires transitions between them automatically. The live engine polls Spotify every 3 seconds — when a track is approaching its cut point (randomized per track, 15–90 seconds before the end), it fires a transition and starts the next track.
+
+### DJ Styles
+
+Each style models a real headliner's approach — track selection, transition character, energy arc.
+
+| Style | Character | Transitions |
+|---|---|---|
+| `fisher` | Tech house. Filthy basslines, Losing It energy, peak hour aggression | Hard cuts, spinbacks, stutter |
+| `garrix` | Big room EDM. Festival anthems, euphoric drops, 80,000 people | Massive swells before every drop |
+| `james_hype` | UK tech house. Hip hop blends, vocal cuts, Ferrari energy | Quick cuts, echo chops |
+| `afterlife` | Melodic techno. Anyma / Tale Of Us, Ibiza at sunset, cinematic | Smooth fades, swells, echo |
+| `carl_cox` | Classic techno. Underground, relentless, three-deck precision | Surgical hard cuts, no sentimentality |
+| `solomun` | Deep melodic house. Hypnotic grooves, Pacha Ibiza, slow burns | Long blends, never rushes |
+| `charlotte` | Dark minimal techno. Industrial, brutal, Doppler is the weapon | Hard cuts, spinbacks, stutter |
+
+### Transition styles
+
+| Style | What it sounds like |
+|---|---|
+| `fade` | Smooth 3s fade out → skip → 3s fade in |
+| `cut` | Hard drop to 0, instant skip, snap back |
+| `stutter` | Fader chop × 4, hard cut, ramp in |
+| `echo` | Reverb cascade (9 steps), skip, fade in |
+| `swell` | Volume surges past peak, hard drop, skip, ramp in |
+| `spinback` | Rapid spiral down (600ms), snap to next, full volume |
+
+### Live engine
+
+`live=true` runs the autonomous DJ engine — no pre-queueing, Claude drives every transition in real time. The engine stays running until you say *"stop DJ"*.
+
+The engine also auto-refills the track pool when it runs low, so the set never stops.
+
+---
+
 ## All tools
+
+### Core
 
 | Tool | What it does |
 |---|---|
@@ -221,42 +265,15 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 | `get_artist` | Artist info + top tracks + albums |
 | `get_album` | Album details + tracklist |
 | `add_to_queue` | Queue a specific track URI |
-| `dj_set` | Build a multi-phase DJ set (warm up → build → peak → outro) seeded from your top artists |
-| `dj_transition` | Transition to the next track with a style: `fade`, `cut`, `stutter`, `echo`, `swell` |
-| `cut_early` | Jump to the end of the current track and transition |
 
----
+### DJ Mode
 
-## DJ Mode
-
-### `dj_set`
-
-Builds and plays a full DJ set arc seeded from your actual top artists. Phases:
-
-| Phase | Energy | Length |
-|---|---|---|
-| Warm up | Low → medium | ~4 tracks |
-| Build | Medium → high | ~5 tracks |
-| Peak | High → max | ~6 tracks |
-| Outro | Medium | ~3 tracks (optional) |
-
-Each phase searches for mood-matched playlists, pulls tracks, deduplicates against the full session, and queues them in order. Never shuffle — the arc is intentional.
-
-Tell Claude: *"build me a DJ set"* or *"play a peak hour techno set"* and it picks the mood, seeds from your top artists, and runs the arc.
-
-### `dj_transition`
-
-Transition styles:
-
-| Style | What it sounds like |
+| Tool | What it does |
 |---|---|
-| `fade` | 3-second fade out, skip, 3-second fade in |
-| `cut` | Hard drop to 0, instant skip, snap back to volume |
-| `stutter` | Fader chop × 4, hard cut, 8-step fade in |
-| `echo` | Reverb cascade (9 steps), skip, fade in |
-| `swell` | Volume surges to peak, hard drop, skip, fade in |
-
-Tell Claude: *"hit me with an echo transition"* or *"stutter cut to the next track"*.
+| `dj_set` | Build and play a full DJ set. Pass `style` for a headliner style profile, `live=true` for the autonomous engine |
+| `dj_transition` | Fire a transition to the next track: fade, cut, stutter, echo, swell, spinback |
+| `cut_early` | Cut the current track now with a chosen transition style |
+| `stop_dj` | Stop the live DJ engine. Music keeps playing, auto-transitions stop. |
 
 ---
 
@@ -264,7 +281,7 @@ Tell Claude: *"hit me with an echo transition"* or *"stutter cut to the next tra
 
 | File | Purpose |
 |---|---|
-| `server.js` | MCP server |
+| `server.js` | MCP server — core + DJ mode |
 | `auth-setup.js` | One-time OAuth setup |
 | `.spotify-config.json` | Client ID + Secret (**gitignored**) |
 | `.spotify-tokens.json` | Auth tokens, auto-managed (**gitignored**) |
