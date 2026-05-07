@@ -17,6 +17,16 @@ Built for Claude Code. Drop it in and it watches what you're working on — the 
 
 ---
 
+## Quickstart
+
+Don't want to read the docs? Just give Claude the repo link:
+
+> *"Set up this MCP for me: github.com/kaceburnette/spotify-mcp"*
+
+Claude will clone it, install dependencies, add the config, and have it running. That's it.
+
+---
+
 ## Requirements
 
 - Node.js 18+
