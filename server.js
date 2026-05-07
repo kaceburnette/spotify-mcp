@@ -604,7 +604,26 @@ server.tool('get_album', 'Get album details and track list.', { album_id: z.stri
   return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, artist: data.artists?.map(a => a.name).join(', '), release_date: data.release_date, total_tracks: data.total_tracks, uri: data.uri, url: data.external_urls?.spotify, tracks: (data.tracks?.items ?? []).map(t => ({ name: t.name, track_number: t.track_number, duration: fmtMs(t.duration_ms), uri: t.uri })) }, null, 2) }] };
 });
 
-// ── DJ Tools ─────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// ── DJ MODE — OPTIONAL / ADVANCED ────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Everything below this line is the DJ layer. It is SEPARATE from the core
+// spotify-mcp experience (vibe detection, mood, queue management, playback).
+//
+// Core features work with zero knowledge of DJ mode. DJ mode is opt-in:
+//   - User explicitly asks for a "DJ set" or "live DJ"
+//   - Claude calls dj_set (with live=true for the autonomous engine)
+//   - User calls stop_dj to end it
+//
+// DO NOT call dj_transition / cut_early / dj_set / stop_dj during normal
+// playback. The standard detect_vibe → set_mood → queue flow handles
+// everything else. DJ mode is a headliner set, not background music.
+//
+// Limitation: Spotify's API gives us volume control + skip only. No audio
+// stream access = no true crossfade, no EQ, no pitch. Transitions are
+// volume-based effects that simulate DJ techniques, not real mixing.
+// ══════════════════════════════════════════════════════════════════════════════
 
 async function setVol(v) {
   return spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.max(0, Math.min(100, Math.round(v))) } }).catch(() => {});
