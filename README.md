@@ -14,6 +14,12 @@ Every Claude Code session starts with **Back in Black**. You can change it.
 - **Fully configurable** — startup song, startup mood, per-mood playlist keywords, artist/track blacklist. All in `.spotify-prefs.json`.
 - **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024. Uses top tracks, artist catalogs, and playlist search only.
 
+### DJ Mode (optional)
+
+Say **"start a DJ set"** to activate. Claude builds a warm up → build → peak arc, picks tracks, and fires transitions between them. This is a separate feature — it does nothing unless you ask for it. Normal vibe detection and playback work completely independently.
+
+DJ mode is volume-effect based (fade, cut, stutter, echo, swell, spinback). Spotify's API doesn't expose the audio stream, so true audio crossfade isn't possible through this MCP. What you get is the best approximation available through remote control.
+
 ---
 
 ## Requirements
