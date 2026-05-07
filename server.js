@@ -734,20 +734,27 @@ server.tool('dj_set',
     const usedUris  = new Set();
     let   firstDone = false;
 
-    const pullTracksFromPlaylist = async (query) => {
-      const sr = await spotifyFetch('/search', { query: { q: query, type: 'playlist', limit: 10 } });
-      const pls = (sr?.playlists?.items ?? []).filter(p => p?.id);
-      if (!pls.length) return [];
-      // Some playlists return 403 — iterate all results until one works
-      for (const pl of pls) {
-        try {
-          const total  = pl.tracks?.total ?? 50;
-          const offset = Math.floor(Math.random() * Math.max(1, total - 30));
-          const pr     = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 40, offset } });
-          const tracks = (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !usedUris.has(t.id));
-          if (tracks.length > 0) return tracks;
-        } catch (_) {}
-      }
+    const pullTracks = async (query) => {
+      // Track search is primary — always accessible, no 403 issues
+      try {
+        const sr = await spotifyFetch('/search', { query: { q: query, type: 'track', limit: 50 } });
+        const tracks = (sr?.tracks?.items ?? []).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !usedUris.has(t.id));
+        if (tracks.length >= 3) return tracks;
+      } catch (_) {}
+      // Fallback: try playlists (some are accessible)
+      try {
+        const sr  = await spotifyFetch('/search', { query: { q: query, type: 'playlist', limit: 10 } });
+        const pls = (sr?.playlists?.items ?? []).filter(p => p?.id);
+        for (const pl of pls) {
+          try {
+            const total  = pl.tracks?.total ?? 50;
+            const offset = Math.floor(Math.random() * Math.max(1, total - 30));
+            const pr     = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 40, offset } });
+            const tracks = (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !usedUris.has(t.id));
+            if (tracks.length > 0) return tracks;
+          } catch (_) {}
+        }
+      } catch (_) {}
       return [];
     };
 
@@ -757,13 +764,13 @@ server.tool('dj_set',
 
       // Mix: playlist discovery + personal taste seeded with top artist names
       await Promise.allSettled(phase.queries.map(async q => {
-        try { pool.push(...await pullTracksFromPlaylist(q)); } catch (_) {}
+        try { pool.push(...await pullTracks(q)); } catch (_) {}
       }));
 
       // Sprinkle in top artist tracks if we have them (makes the set personal)
       if (topArtistNames.length) {
         const artistSeed = topArtistNames[Math.floor(Math.random() * topArtistNames.length)];
-        try { pool.push(...await pullTracksFromPlaylist(`${artistSeed} ${genre}`)); } catch (_) {}
+        try { pool.push(...await pullTracks(`${artistSeed} ${genre}`)); } catch (_) {}
       }
 
       shuffle(pool);
