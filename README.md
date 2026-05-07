@@ -248,11 +248,11 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 
 ## Troubleshooting
 
-**"No active device found"** — Open Spotify on any device. The app needs to be running (even paused) for the API to see it.
+**"No active device found"** — The Spotify API requires a track to have been played on the device recently. Open Spotify, press play on anything for a second, then pause it. That wakes the device up. After that Claude can take over.
 
 **"No tokens found"** — Run `node auth-setup.js` to re-authenticate.
 
-**Music not switching on vibe change** — Make sure Spotify is open on a device. The API can't play to a closed app.
+**Music not switching on vibe change** — Make sure Spotify is open and has been played on recently (see above).
 
 **Want to reset the vibe** — Tell Claude `"clear session"` to wipe seen tracks and start discovery fresh.
 
