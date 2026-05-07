@@ -35,9 +35,9 @@ async function start(deviceName = DEVICE_NAME) {
     throw new Error('Windows not yet supported.');
   }
 
-  const Speaker      = require('speaker');
   const librespotBin = _findLibrespot();
   const accessToken  = _readAccessToken();
+  const playBin      = _findPlay();
 
   const librespotArgs = [
     '--backend',  'pipe',
@@ -48,17 +48,20 @@ async function start(deviceName = DEVICE_NAME) {
   ];
   if (accessToken) librespotArgs.push('--access-token', accessToken);
 
+  // sox `play` reads raw S16LE stereo 44100Hz from stdin — stable, no native bindings
+  const playArgs = ['-q', '-t', 'raw', '-r', '44100', '-e', 'signed-integer', '-b', '16', '-c', '2', '-L', '-'];
+
   _engine    = new DJEngine();
-  _speaker   = new Speaker({ channels: 2, bitDepth: 16, sampleRate: 44100, signed: true });
+  _speaker   = spawn(playBin, playArgs, { stdio: ['pipe', 'ignore', 'ignore'] });
   _librespot = spawn(librespotBin, librespotArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-  _speaker.on('error', err => process.stderr.write('[speaker] ' + err.message + '\n'));
-  _engine.on('error',  err => process.stderr.write('[engine] '  + err.message + '\n'));
+  _engine.on('error',    err => process.stderr.write('[engine] '    + err.message + '\n'));
+  _speaker.on('error',   err => process.stderr.write('[play] '      + err.message + '\n'));
   _librespot.on('error', err => process.stderr.write('[librespot] ' + err.message + '\n'));
   _librespot.stderr.on('data', d => process.stderr.write('[librespot] ' + d));
   _librespot.on('exit', () => { if (_active) _active = false; });
 
-  _librespot.stdout.pipe(_engine).pipe(_speaker);
+  _librespot.stdout.pipe(_engine).pipe(_speaker.stdin);
 
   _active = true;
   return _engine;
@@ -68,9 +71,9 @@ async function start(deviceName = DEVICE_NAME) {
 async function stop() {
   _active = false;
   try { _librespot?.stdout?.unpipe(); } catch (_) {}
-  try { _engine?.unpipe(); }           catch (_) {}
+  try { _engine?.unpipe(); }            catch (_) {}
   _librespot?.kill();
-  try { _speaker?.end(); }             catch (_) {}
+  _speaker?.kill();
   _librespot = null;
   _speaker   = null;
   _engine    = null;
@@ -89,6 +92,16 @@ function _readAccessToken() {
     const data = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
     return data.accessToken || null;
   } catch (_) { return null; }
+}
+
+function _findPlay() {
+  try {
+    const { execSync } = require('child_process');
+    const which = process.platform === 'win32' ? 'where' : 'which';
+    const found = execSync(`${which} play`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    if (found) return found.split('\n')[0].trim();
+  } catch (_) {}
+  throw new Error('sox `play` not found. Install it: brew install sox (Mac) / apt install sox (Linux)');
 }
 
 function _findLibrespot() {
