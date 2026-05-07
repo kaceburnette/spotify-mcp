@@ -152,17 +152,17 @@ Claude reads your session — open files, what you're building, recent commits, 
 | `lock_in` | high | techno, drum & bass, industrial |
 | `hype` | high | rap, trap, high energy hip hop |
 | `pump_up` | high | motivational hip hop |
-| `workout` | max | gym rap, EDM, intense |
-| `confident` | high | boss rap, power R&B |
-| `creative` | medium | jazz, indie, alternative |
-| `chill` | low | R&B, soul, laid back hip hop |
-| `relax` | low | acoustic, mellow, soft |
+| `workout` | max | phonk, hard trap, drill |
+| `confident` | high | power rap, walk like a badass energy |
+| `creative` | medium | Jon Hopkins, film scores, flow state ambient |
+| `chill` | low | coffeehouse jazz, chillhop, peaceful piano |
+| `relax` | low | Nils Frahm, Ólafur Arnalds, soft ambient |
 | `wind_down` | min | ambient, soft piano |
-| `background` | min | classical, ambient, cafe |
-| `night_drive` | medium | synthwave, dark electronic |
+| `background` | min | classical, quiet instrumental, cafe ambient |
+| `night_drive` | medium | darksynth, cyberpunk, chillsynth |
 | `in_my_feels` | low | emotional R&B, indie |
 | `sad` | low | sad indie, heartbreak |
-| `angry` | max | metal, hard rock, punk |
+| `angry` | max | metal, hard rap, drill |
 
 ---
 
@@ -172,8 +172,8 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 
 ```markdown
 # Spotify — Auto Vibe
-- At the start of every session, call `detect_vibe` with context about what the user is working on, their energy, and time of day. Let it auto-apply the mood.
-- When the task or energy shifts significantly (debugging → shipped, coding → meeting), call `detect_vibe` again.
+- At the start of every session, call `detect_vibe` with rich context: what project is open, what files are being worked on, what the user just said, what task is happening (debugging, building, shipping, reviewing, on a call), the user's apparent energy (frustrated, focused, hyped, tired, casual), and the current time.
+- When the task or energy shifts significantly (debugging → shipped, coding → call, grinding → winding down), call `detect_vibe` again.
 - Never ask permission to set the mood — read the context and do it.
 ```
 
