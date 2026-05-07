@@ -810,6 +810,7 @@ const djLive = {
   pool: [], usedUris: new Set(),
   lastTransition: 0, transitioning: false, timer: null,
   currentTrackId: null, cutPoint: 0,
+  nextUri: null, preQueued: false,
   styleTransitions: null, // set by dj_set when a style profile is used
 };
 
@@ -849,29 +850,43 @@ async function startLiveDJ(genre, phase, pool) {
       const now = Date.now();
       if (now - djLive.lastTransition < 25000) return; // debounce
 
-      // When track changes, roll a new random cut point for this track.
-      // Range: 15s–90s before end. Makes some transitions early, some near end.
+      // New track detected — preload next into Spotify queue so it buffers immediately
       if (player.item.id !== djLive.currentTrackId) {
         djLive.currentTrackId = player.item.id;
-        djLive.cutPoint = 15000 + Math.floor(Math.random() * 75000); // 15–90s
+        djLive.cutPoint  = 20000 + Math.floor(Math.random() * 60000); // 20–80s before end
+        djLive.preQueued = false;
+        djLive.nextUri   = null;
+        // Pick the next track now and pre-queue it for instant buffering
+        if (djLive.pool.length < 3) {
+          const more = await refillDJPool();
+          djLive.pool.push(...more);
+        }
+        const preNext = djLive.pool.shift();
+        if (preNext) {
+          djLive.nextUri = preNext.uri;
+          djLive.usedUris.add(preNext.uri);
+          // Add to Spotify queue so it buffers in background
+          await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: preNext.uri } }).catch(() => {});
+          djLive.preQueued = true;
+        }
       }
       if (remaining > djLive.cutPoint || remaining <= 0) return;
 
-      if (djLive.pool.length < 3) {
+      // Refill pool for after this transition
+      if (djLive.pool.length < 2) {
         const more = await refillDJPool();
         djLive.pool.push(...more);
       }
-      const next = djLive.pool.shift();
-      if (!next) return;
 
-      djLive.usedUris.add(next.uri);
       djLive.lastTransition = now;
       djLive.transitioning  = true;
 
       const vol    = player.device?.volume_percent ?? 80;
       const styles = djLive.styleTransitions ?? PHASE_STYLES[djLive.phase] ?? ['fade', 'cut'];
       const style  = styles[Math.floor(Math.random() * styles.length)];
-      await performTransition(style, vol, next.uri);
+      // If pre-queued, skip to buffered track (fast). Otherwise play URI directly.
+      const nextUri = djLive.preQueued ? null : djLive.nextUri;
+      await performTransition(style, vol, nextUri);
     } catch (_) {}
     djLive.transitioning = false;
   }, 3000);
@@ -986,7 +1001,7 @@ server.tool('dj_set',
         try { pool.push(...await pullTracks(q)); } catch (_) {}
       }));
 
-      if (topArtistNames.length) {
+      if (topArtistNames.length && !profile) {
         const artistSeed = topArtistNames[Math.floor(Math.random() * topArtistNames.length)];
         try { pool.push(...await pullTracks(`${artistSeed} ${genre}`)); } catch (_) {}
       }
