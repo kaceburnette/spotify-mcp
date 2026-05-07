@@ -659,6 +659,15 @@ async function performTransition(style, vol, nextUri = null) {
       break;
     }
 
+    case 'spinback': {
+      // Rapid volume spiral down (simulates record spinning back), snap to next, slam back in
+      for (let i = 10; i >= 0; i--) { await setVol(vol * i / 10); await sleep(60); }
+      await playNext();
+      await sleep(200);
+      await setVol(vol);
+      break;
+    }
+
     case 'fade':
     default: {
       for (let i = 9; i >= 0; i--) { await setVol(vol * i / 10); await sleep(300); }
@@ -673,9 +682,9 @@ async function performTransition(style, vol, nextUri = null) {
 // ── Live DJ Engine ────────────────────────────────────────────────────────────
 
 const PHASE_STYLES = {
-  'warm up': ['fade', 'fade', 'swell'],
-  'build':   ['swell', 'cut', 'swell'],
-  'peak':    ['stutter', 'echo', 'cut', 'stutter'],
+  'warm up': ['fade', 'fade', 'swell', 'fade'],
+  'build':   ['swell', 'cut', 'swell', 'echo'],
+  'peak':    ['stutter', 'echo', 'cut', 'spinback', 'stutter'],
   'outro':   ['fade', 'fade'],
 };
 
@@ -683,6 +692,7 @@ const djLive = {
   active: false, genre: null, phase: 'peak',
   pool: [], usedUris: new Set(),
   lastTransition: 0, transitioning: false, timer: null,
+  currentTrackId: null, cutPoint: 0, // per-track random cut point
 };
 
 function stopLiveDJ() {
@@ -720,7 +730,14 @@ async function startLiveDJ(genre, phase, pool) {
       const remaining = player.item.duration_ms - player.progress_ms;
       const now = Date.now();
       if (now - djLive.lastTransition < 25000) return; // debounce
-      if (remaining > 12000 || remaining <= 0) return;  // not in transition window
+
+      // When track changes, roll a new random cut point for this track.
+      // Range: 15s–90s before end. Makes some transitions early, some near end.
+      if (player.item.id !== djLive.currentTrackId) {
+        djLive.currentTrackId = player.item.id;
+        djLive.cutPoint = 15000 + Math.floor(Math.random() * 75000); // 15–90s
+      }
+      if (remaining > djLive.cutPoint || remaining <= 0) return;
 
       if (djLive.pool.length < 3) {
         const more = await refillDJPool();
@@ -745,7 +762,7 @@ async function startLiveDJ(genre, phase, pool) {
 server.tool('dj_transition',
   'DJ-style transition to the next track. Multiple styles: fade (smooth club mix), cut (instant hard drop), stutter (fader chop technique), echo (reverb tail cascade), swell (energy builds then cuts). Default: fade.',
   {
-    style: z.enum(['fade', 'cut', 'stutter', 'echo', 'swell']).default('fade').describe('Transition style'),
+    style: z.enum(['fade', 'cut', 'stutter', 'echo', 'swell', 'spinback']).default('fade').describe('Transition style'),
   },
   async ({ style }) => {
     const current = await spotifyFetch('/me/player');
@@ -760,17 +777,13 @@ server.tool('dj_transition',
 server.tool('cut_early',
   'Cut the current track now and mix into the next. Pass a style for the transition type.',
   {
-    style: z.enum(['fade', 'cut', 'stutter', 'echo', 'swell']).default('cut').describe('Transition style — default cut for an early exit'),
+    style: z.enum(['fade', 'cut', 'stutter', 'echo', 'swell', 'spinback']).default('cut').describe('Transition style — default cut for an early exit'),
   },
   async ({ style }) => {
     const current  = await spotifyFetch('/me/player');
     const vol      = current?.device?.volume_percent ?? 80;
-    const duration = current?.item?.duration_ms;
-    // Seek to 3 seconds before end so the track "ends" naturally into the transition
-    if (duration) {
-      await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: Math.max(0, duration - 3000) } });
-      await sleep(300);
-    }
+    // No seek — just fire the transition from wherever the track is.
+    // Seeking to near-end causes the track to expire naturally mid-effect and double-skip.
     await performTransition(style, vol);
     const result = await spotifyFetch('/me/player');
     if (result?.item) updateSeeds([result.item]);
