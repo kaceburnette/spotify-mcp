@@ -114,22 +114,22 @@ function isBlacklisted(t) {
 // --- Mood Engine ---
 
 const MOOD_PROFILES = {
-  grind:       { energy: 'high',   keywords: ['dark electronic focus coding', 'deep work techno instrumental', 'coding electronic beats'] },
-  focus:       { energy: 'medium', keywords: ['deep focus study concentration', 'lo-fi study beats', 'ambient focus instrumental'] },
-  lock_in:     { energy: 'high',   keywords: ['techno focus dark intense', 'drum and bass focus work', 'industrial electronic grind'] },
-  hype:        { energy: 'high',   keywords: ['hip hop hype energy 2024', 'trap bangers rap', 'high energy rap playlist'] },
-  workout:     { energy: 'max',    keywords: ['gym workout motivation intense', 'hip hop gym playlist', 'edm workout hard'] },
-  pump_up:     { energy: 'high',   keywords: ['pump up power motivation music', 'motivational hip hop rap', 'power workout playlist'] },
-  chill:       { energy: 'low',    keywords: ['chill vibes r&b soul', 'smooth chill laid back', 'chill hip hop vibes'] },
-  relax:       { energy: 'low',    keywords: ['relax calm peaceful instrumental', 'soft acoustic relax', 'mellow chill out'] },
+  grind:       { energy: 'high',   keywords: ['coding mode chillhop beats', 'liquid drum and bass focus', 'synthwave coding instrumental'] },
+  focus:       { energy: 'medium', keywords: ['deep focus brain food', 'lofi hip hop beats study', 'IDM focus aphex twin boards of canada'] },
+  lock_in:     { energy: 'high',   keywords: ['darksynth cyberpunk coding', 'cyberpunk dark focus programming', 'perturbator carpenter brut darksynth'] },
+  hype:        { energy: 'high',   keywords: ['confidence boost walk like a badass', 'porter robinson future bass hype', 'polyphia instrumental energy'] },
+  workout:     { energy: 'max',    keywords: ['gym phonk aggressive workout', 'workout phonk 2024', 'aggressive gym motivation trap'] },
+  pump_up:     { energy: 'high',   keywords: ['pump up phonk motivation', 'high energy rap hype workout', 'aggressive motivation trap phonk'] },
+  chill:       { energy: 'low',    keywords: ['coffeehouse jazz chill beats', 'chillhop relaxed instrumental', 'peaceful piano nils frahm'] },
+  relax:       { energy: 'low',    keywords: ['peaceful piano calm ambient', 'max richter olafur arnalds soft', 'ambient relax instrumental mellow'] },
   wind_down:   { energy: 'min',    keywords: ['sleep ambient calm wind down', 'peaceful instrumental sleep', 'soft piano calm'] },
   sad:         { energy: 'low',    keywords: ['sad indie emotional songs', 'heartbreak sad playlist', 'melancholy emotional music'] },
   in_my_feels: { energy: 'low',    keywords: ['r&b emotional feelings soul', 'indie emotional vibes', 'deep feelings r&b'] },
-  angry:       { energy: 'max',    keywords: ['metal intense aggressive hard', 'hard rock angry heavy', 'punk heavy aggressive'] },
-  night_drive: { energy: 'medium', keywords: ['synthwave night drive retro', 'night drive dark music', 'late night driving music'] },
-  creative:    { energy: 'medium', keywords: ['creative flow jazz instrumental', 'indie creative vibes', 'alternative creative work'] },
-  background:  { energy: 'min',    keywords: ['background ambient instrumental quiet', 'classical background study', 'piano background work cafe'] },
-  confident:   { energy: 'high',   keywords: ['confident boss hip hop energy', 'power moves r&b rap', 'rap confidence swagger'] },
+  angry:       { energy: 'max',    keywords: ['metal intense aggressive hard', 'slipknot meshuggah heavy', 'hard rap drill aggressive'] },
+  night_drive: { energy: 'medium', keywords: ['darksynth late night coding', 'cyberpunk voidsynth night', 'chillsynth retrowave night drive'] },
+  creative:    { energy: 'medium', keywords: ['flow state ambient creative', 'jon hopkins ambient work music', 'film score study creative trent reznor'] },
+  background:  { energy: 'min',    keywords: ['background ambient instrumental quiet', 'peaceful piano background cafe', 'classical background study focus'] },
+  confident:   { energy: 'high',   keywords: ['walk like a badass confidence', 'power moves motivation energy', 'confidence boost hype music'] },
 };
 
 // Apply user overrides from prefs
