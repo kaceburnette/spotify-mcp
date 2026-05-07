@@ -3,526 +3,610 @@
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { z } = require('zod');
-const SpotifyWebApi = require('spotify-web-api-node');
 const fs = require('fs');
 const path = require('path');
 
-const TOKEN_PATH = path.join(__dirname, '.spotify-tokens.json');
+const TOKEN_PATH  = path.join(__dirname, '.spotify-tokens.json');
 const CONFIG_PATH = path.join(__dirname, '.spotify-config.json');
+const STATE_PATH  = path.join(__dirname, '.spotify-state.json');
+const PREFS_PATH  = path.join(__dirname, '.spotify-prefs.json');
 
-// --- Token Management ---
+// --- Config + Token Management ---
 
 function loadConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    throw new Error('Missing .spotify-config.json — run: node auth-setup.js');
-  }
+  if (!fs.existsSync(CONFIG_PATH)) throw new Error('Missing .spotify-config.json — run: node auth-setup.js');
   return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 }
 
 function loadTokens() {
-  if (!fs.existsSync(TOKEN_PATH)) {
-    throw new Error('No tokens found — run: node auth-setup.js');
-  }
+  if (!fs.existsSync(TOKEN_PATH)) throw new Error('No tokens found — run: node auth-setup.js');
   return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
 }
 
-function saveTokens(tokens) {
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
-}
+function saveTokens(t) { fs.writeFileSync(TOKEN_PATH, JSON.stringify(t, null, 2)); }
 
 const config = loadConfig();
-const spotify = new SpotifyWebApi({
-  clientId: config.clientId,
-  clientSecret: config.clientSecret,
-});
+let _token = { accessToken: null, refreshToken: null, expiresAt: 0 };
 
-async function ensureAuth() {
-  const tokens = loadTokens();
-  spotify.setAccessToken(tokens.accessToken);
-  spotify.setRefreshToken(tokens.refreshToken);
+async function ensureToken() {
+  const saved = loadTokens();
+  _token.refreshToken = saved.refreshToken;
+  _token.accessToken  = saved.accessToken;
+  _token.expiresAt    = saved.expiresAt;
 
-  // Refresh if expiring within 5 minutes
-  if (Date.now() > tokens.expiresAt - 300000) {
-    const data = await spotify.refreshAccessToken();
-    const newTokens = {
-      accessToken: data.body.access_token,
-      refreshToken: tokens.refreshToken,
-      expiresAt: Date.now() + data.body.expires_in * 1000,
-    };
-    saveTokens(newTokens);
-    spotify.setAccessToken(newTokens.accessToken);
+  if (Date.now() > _token.expiresAt - 300_000) {
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: 'Basic ' + Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64'),
+      },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: _token.refreshToken }),
+    });
+    const data = await res.json();
+    if (!data.access_token) throw new Error('Token refresh failed: ' + JSON.stringify(data));
+    _token.accessToken = data.access_token;
+    _token.expiresAt   = Date.now() + data.expires_in * 1000;
+    if (data.refresh_token) _token.refreshToken = data.refresh_token;
+    saveTokens({ accessToken: _token.accessToken, refreshToken: _token.refreshToken, expiresAt: _token.expiresAt });
   }
 }
 
-// Helper to run spotify calls with auto-refresh
-async function withAuth(fn) {
-  await ensureAuth();
-  try {
-    return await fn();
-  } catch (err) {
-    // If 401, try refreshing once more
-    if (err.statusCode === 401) {
-      const tokens = loadTokens();
-      spotify.setRefreshToken(tokens.refreshToken);
-      const data = await spotify.refreshAccessToken();
-      const newTokens = {
-        accessToken: data.body.access_token,
-        refreshToken: tokens.refreshToken,
-        expiresAt: Date.now() + data.body.expires_in * 1000,
-      };
-      saveTokens(newTokens);
-      spotify.setAccessToken(newTokens.accessToken);
-      return await fn();
-    }
-    throw err;
+async function spotifyFetch(endpoint, { method = 'GET', body, query } = {}) {
+  await ensureToken();
+  let url = `https://api.spotify.com/v1${endpoint}`;
+  if (query) {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) if (v != null) p.set(k, v);
+    url += '?' + p.toString();
   }
+  const opts = {
+    method,
+    headers: { Authorization: `Bearer ${_token.accessToken}`, 'Content-Type': 'application/json' },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+
+  let res = await fetch(url, opts);
+  if (res.status === 401) {
+    _token.expiresAt = 0;
+    await ensureToken();
+    opts.headers.Authorization = `Bearer ${_token.accessToken}`;
+    res = await fetch(url, opts);
+  }
+  if (res.status === 204 || res.status === 202) return null;
+  if (!res.ok) { const msg = await res.text().catch(() => ''); throw new Error(`Spotify ${res.status}: ${msg}`); }
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+// --- User Prefs ---
+// .spotify-prefs.json is user-editable and sharable. Copy spotify-prefs.example.json to get started.
+
+const DEFAULT_PREFS = {
+  startup_mood: 'grind',
+  startup_song: 'spotify:track:08mG3Y1vljYA6bvDt4Wqkj', // Back in Black — AC/DC. Override in .spotify-prefs.json
+  mood_overrides: {},       // override keywords for any mood: { "grind": { "keywords": [...] } }
+  blacklist_artists: [],    // artist names to never queue (case-insensitive substring match)
+  blacklist_tracks: [],     // track IDs to never queue
+};
+
+function loadPrefs() {
+  if (!fs.existsSync(PREFS_PATH)) return { ...DEFAULT_PREFS };
+  try { return { ...DEFAULT_PREFS, ...JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8')) }; }
+  catch { return { ...DEFAULT_PREFS }; }
+}
+
+function savePrefs() { fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2)); }
+
+const prefs = loadPrefs();
+
+function isBlacklisted(t) {
+  if (!t?.id) return true;
+  if (prefs.blacklist_tracks?.includes(t.id)) return true;
+  if (prefs.blacklist_artists?.length && t.artists?.some(a =>
+    prefs.blacklist_artists.some(b => a.name.toLowerCase().includes(b.toLowerCase()))
+  )) return true;
+  return false;
+}
+
+// --- Mood Engine ---
+
+const MOOD_PROFILES = {
+  grind:       { energy: 'high',   keywords: ['dark electronic focus coding', 'deep work techno instrumental', 'coding electronic beats'] },
+  focus:       { energy: 'medium', keywords: ['deep focus study concentration', 'lo-fi study beats', 'ambient focus instrumental'] },
+  lock_in:     { energy: 'high',   keywords: ['techno focus dark intense', 'drum and bass focus work', 'industrial electronic grind'] },
+  hype:        { energy: 'high',   keywords: ['hip hop hype energy 2024', 'trap bangers rap', 'high energy rap playlist'] },
+  workout:     { energy: 'max',    keywords: ['gym workout motivation intense', 'hip hop gym playlist', 'edm workout hard'] },
+  pump_up:     { energy: 'high',   keywords: ['pump up power motivation music', 'motivational hip hop rap', 'power workout playlist'] },
+  chill:       { energy: 'low',    keywords: ['chill vibes r&b soul', 'smooth chill laid back', 'chill hip hop vibes'] },
+  relax:       { energy: 'low',    keywords: ['relax calm peaceful instrumental', 'soft acoustic relax', 'mellow chill out'] },
+  wind_down:   { energy: 'min',    keywords: ['sleep ambient calm wind down', 'peaceful instrumental sleep', 'soft piano calm'] },
+  sad:         { energy: 'low',    keywords: ['sad indie emotional songs', 'heartbreak sad playlist', 'melancholy emotional music'] },
+  in_my_feels: { energy: 'low',    keywords: ['r&b emotional feelings soul', 'indie emotional vibes', 'deep feelings r&b'] },
+  angry:       { energy: 'max',    keywords: ['metal intense aggressive hard', 'hard rock angry heavy', 'punk heavy aggressive'] },
+  night_drive: { energy: 'medium', keywords: ['synthwave night drive retro', 'night drive dark music', 'late night driving music'] },
+  creative:    { energy: 'medium', keywords: ['creative flow jazz instrumental', 'indie creative vibes', 'alternative creative work'] },
+  background:  { energy: 'min',    keywords: ['background ambient instrumental quiet', 'classical background study', 'piano background work cafe'] },
+  confident:   { energy: 'high',   keywords: ['confident boss hip hop energy', 'power moves r&b rap', 'rap confidence swagger'] },
+};
+
+// Apply user overrides from prefs
+for (const [mood, overrides] of Object.entries(prefs.mood_overrides || {})) {
+  if (MOOD_PROFILES[mood]) Object.assign(MOOD_PROFILES[mood], overrides);
+}
+
+// --- Persistent State ---
+
+const DEFAULT_STATE = { mood: null, moodSetAt: null, seedTrackIds: [], seedArtistIds: [], seenTrackIds: [], tracksQueued: 0 };
+
+function loadState() {
+  if (!fs.existsSync(STATE_PATH)) return { ...DEFAULT_STATE };
+  try { return { ...DEFAULT_STATE, ...JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')) }; }
+  catch { return { ...DEFAULT_STATE }; }
+}
+
+const state = loadState();
+state.seenTrackIds = new Set(state.seenTrackIds);
+
+// Apply startup_mood from prefs if set and no mood is currently active
+if (prefs.startup_mood && MOOD_PROFILES[prefs.startup_mood] && !state.mood) {
+  state.mood = prefs.startup_mood;
+  state.moodSetAt = new Date().toISOString();
+}
+
+function saveState() {
+  fs.writeFileSync(STATE_PATH, JSON.stringify({
+    mood: state.mood, moodSetAt: state.moodSetAt,
+    seedTrackIds: state.seedTrackIds.slice(-20), seedArtistIds: state.seedArtistIds.slice(-20),
+    seenTrackIds: [...state.seenTrackIds].slice(-500), tracksQueued: state.tracksQueued,
+  }, null, 2));
+}
+
+// --- Discovery Engine ---
+// No /recommendations (deprecated Nov 2024). Three sources:
+// 1. Personal top tracks — what you actually listen to
+// 2. Top artist catalogs — breadth from known taste
+// 3. Mood-keyed playlist search — genuine discovery of new material
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function updateSeeds(tracks) {
+  for (const t of tracks) {
+    if (!t?.id) continue;
+    if (!state.seedTrackIds.includes(t.id)) state.seedTrackIds.push(t.id);
+    const aid = t.artists?.[0]?.id;
+    if (aid && !state.seedArtistIds.includes(aid)) state.seedArtistIds.push(aid);
+    state.seenTrackIds.add(t.id);
+  }
+  if (state.seedTrackIds.length > 20) state.seedTrackIds = state.seedTrackIds.slice(-20);
+  if (state.seedArtistIds.length > 20) state.seedArtistIds = state.seedArtistIds.slice(-20);
+  saveState();
+}
+
+async function discoverTracks(count = 15) {
+  const candidates = new Map();
+
+  const add = (tracks) => {
+    for (const t of (tracks ?? [])) {
+      if (t?.id && !state.seenTrackIds.has(t.id) && !candidates.has(t.id) && !isBlacklisted(t)) {
+        candidates.set(t.id, t);
+      }
+    }
+  };
+
+  // Source 1: personal top tracks
+  await Promise.allSettled([
+    spotifyFetch('/me/top/tracks', { query: { time_range: 'short_term',  limit: 50 } }).then(r => add(r?.items)),
+    spotifyFetch('/me/top/tracks', { query: { time_range: 'medium_term', limit: 50 } }).then(r => add(r?.items)),
+  ]);
+
+  // Source 2: top artist catalogs
+  try {
+    const r = await spotifyFetch('/me/top/artists', { query: { time_range: 'short_term', limit: 15 } });
+    if (r?.items?.length) {
+      await Promise.allSettled(
+        shuffle([...r.items]).slice(0, 3).map(a =>
+          spotifyFetch(`/artists/${a.id}/top-tracks`, { query: { market: 'US' } }).then(r => add(r?.tracks))
+        )
+      );
+    }
+  } catch (_) {}
+
+  // Source 3: mood-keyed playlist search
+  if (state.mood && MOOD_PROFILES[state.mood]) {
+    const kws = shuffle([...MOOD_PROFILES[state.mood].keywords]).slice(0, 2);
+    await Promise.allSettled(kws.map(async (kw) => {
+      try {
+        const sr = await spotifyFetch('/search', { query: { q: kw, type: 'playlist', limit: 5 } });
+        const playlists = (sr?.playlists?.items ?? []).filter(p => p?.id);
+        if (!playlists.length) return;
+        const pl    = playlists[Math.floor(Math.random() * playlists.length)];
+        const total = pl.tracks?.total ?? 100;
+        const offset = Math.max(0, Math.floor(Math.random() * Math.max(1, total - 25)));
+        const pr = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 25, offset } });
+        add((pr?.items ?? []).map(i => i?.track).filter(t => t?.id));
+      } catch (_) {}
+    }));
+  }
+
+  return shuffle([...candidates.values()]).slice(0, count);
+}
+
+// --- Queue Manager ---
+
+const MIN_QUEUE_DEPTH   = 5;
+const QUEUE_REFILL_COUNT = 15;
+
+async function ensureQueueDepth() {
+  try {
+    const data  = await spotifyFetch('/me/player/queue');
+    const depth = (data?.queue ?? []).length;
+    if (depth >= MIN_QUEUE_DEPTH) return { refilled: false, depth };
+
+    const tracks = await discoverTracks(QUEUE_REFILL_COUNT);
+    let added = 0;
+    for (const t of tracks) {
+      try {
+        await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: t.uri } });
+        added++;
+        state.tracksQueued++;
+        updateSeeds([t]);
+      } catch (_) {}
+    }
+    saveState();
+    return { refilled: true, added, depth: depth + added };
+  } catch (err) {
+    return { refilled: false, error: err.message };
+  }
+}
+
+// --- Vibe Detection ---
+// Keyword scoring map for detect_vibe. Claude passes session context as text;
+// this maps it to a mood using keyword frequency + time-of-day signals.
+
+const VIBE_KEYWORDS = {
+  lock_in:     ['debug', 'bug', 'prod', 'urgent', 'deadline', 'incident', 'down', 'broken', 'hotfix', 'outage'],
+  grind:       ['code', 'coding', 'build', 'implement', 'feature', 'commit', 'refactor', 'sprint', 'pr', 'push', 'ship', 'shipping'],
+  focus:       ['focus', 'deep focus', 'deep work', 'concentration', 'concentrate', 'zero distraction', 'instrumental', 'no lyrics', 'study', 'review', 'read', 'document', 'write', 'plan', 'think', 'research', 'draft', 'locked in'],
+  hype:        ['shipped', 'merged', 'launched', 'released', 'done', 'finished', 'deployed', 'just pushed', 'celebrate'],
+  confident:   ['meeting', 'demo', 'pitch', 'presentation', 'client', 'sales', 'investor', 'ceo', 'boss'],
+  creative:    ['design', 'brainstorm', 'idea', 'concept', 'wireframe', 'figma', 'sketch', 'creative'],
+  chill:       ['slow', 'easy', 'casual', 'friday', 'weekend', 'break', 'lunch', 'coffee'],
+  night_drive: ['night', 'late', 'midnight', 'dark', '11pm', '12am', '1am', '2am', '3am'],
+  wind_down:   ['tired', 'exhausted', 'wrapping up', 'calling it', 'done for the day', 'winding down'],
+  background:  ['call', 'zoom', 'meeting', 'talking', 'phone', 'on a call'],
+  workout:     ['gym', 'workout', 'run', 'lift', 'training', 'exercise'],
+};
+
+// Explicit mood name mentions get a big score boost — "I want focus vibes" → focus wins
+const EXPLICIT_MOOD_TRIGGERS = {
+  focus:       ['focus vibe', 'focus mode', 'deep focus', 'deep work', 'focus work', 'code focus', 'concentration'],
+  grind:       ['grind vibe', 'grind mode', 'grind session', 'grind time'],
+  lock_in:     ['lock in', 'lock-in', 'locked in vibe', 'tunnel vision'],
+  hype:        ['hype vibe', 'hype mode', 'hype me up', 'energy vibe'],
+  chill:       ['chill vibe', 'chill mode', 'chill out', 'laid back'],
+  confident:   ['ceo vibe', 'boss vibe', 'confident vibe', 'power vibe'],
+  night_drive: ['night drive', 'night vibe', 'late night vibe'],
+  workout:     ['workout vibe', 'gym vibe', 'pump up vibe'],
+  creative:    ['creative vibe', 'creative mode', 'creative flow'],
+};
+
+function detectMood(context) {
+  const ctx  = context.toLowerCase();
+  const hour = new Date().getHours();
+  const scores = Object.fromEntries(Object.keys(VIBE_KEYWORDS).map(m => [m, 0]));
+
+  for (const [mood, kws] of Object.entries(VIBE_KEYWORDS)) {
+    scores[mood] = kws.filter(kw => ctx.includes(kw)).length;
+  }
+
+  // Explicit trigger phrases score +5 (override everything)
+  for (const [mood, triggers] of Object.entries(EXPLICIT_MOOD_TRIGGERS)) {
+    if (triggers.some(t => ctx.includes(t))) scores[mood] = (scores[mood] || 0) + 5;
+  }
+
+  // Time-of-day boosts
+  if (hour >= 22 || hour < 5)  { scores.night_drive += 2; scores.lock_in  += 1; }
+  if (hour >= 5  && hour < 10) { scores.grind       += 1; scores.confident += 1; }
+  if (hour >= 14 && hour < 17) { scores.chill       += 1; }
+
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  return { recommended: sorted[0]?.[0] || 'grind', scores: Object.fromEntries(sorted.filter(([, v]) => v > 0)) };
 }
 
 // --- Formatters ---
 
-function formatTrack(track) {
-  return {
-    name: track.name,
-    artist: track.artists.map(a => a.name).join(', '),
-    album: track.album?.name,
-    duration: `${Math.floor(track.duration_ms / 60000)}:${String(Math.floor((track.duration_ms % 60000) / 1000)).padStart(2, '0')}`,
-    uri: track.uri,
-    url: track.external_urls?.spotify,
-  };
+const fmtMs = ms => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
+
+function fmtTrack(t) {
+  if (!t) return null;
+  return { name: t.name, artist: t.artists?.map(a => a.name).join(', '), album: t.album?.name, duration: fmtMs(t.duration_ms), uri: t.uri, url: t.external_urls?.spotify, id: t.id };
 }
 
-function formatPlaybackState(state) {
-  if (!state || !state.item) {
-    return { playing: false, message: 'Nothing is currently playing' };
-  }
+function fmtPlayback(s) {
+  if (!s?.item) return { playing: false, message: 'Nothing currently playing' };
   return {
-    playing: state.is_playing,
-    track: formatTrack(state.item),
-    device: state.device ? { name: state.device.name, type: state.device.type, volume: state.device.volume_percent } : null,
-    shuffle: state.shuffle_state,
-    repeat: state.repeat_state,
-    progress: `${Math.floor(state.progress_ms / 60000)}:${String(Math.floor((state.progress_ms % 60000) / 1000)).padStart(2, '0')}`,
+    playing: s.is_playing,
+    track:   fmtTrack(s.item),
+    device:  s.device ? { name: s.device.name, type: s.device.type, volume: s.device.volume_percent } : null,
+    shuffle: s.shuffle_state,
+    repeat:  s.repeat_state,
+    progress: fmtMs(s.progress_ms),
+    mood:    state.mood ?? 'none',
   };
 }
 
 // --- MCP Server ---
 
-const server = new McpServer({
-  name: 'spotify',
-  version: '1.0.0',
+const server = new McpServer({ name: 'spotify', version: '3.1.0' });
+
+// ── Mood ─────────────────────────────────────────────────────────────────────
+
+server.tool('set_mood',
+  'Set the listening mood. Call this based on session context — what the user is doing, their energy, what they said. Mood persists across restarts. Available: grind, focus, lock_in, hype, workout, pump_up, chill, relax, wind_down, sad, in_my_feels, angry, night_drive, creative, background, confident.',
+  { mood: z.enum(Object.keys(MOOD_PROFILES)).describe('Mood label') },
+  async ({ mood }) => {
+    state.mood = mood; state.moodSetAt = new Date().toISOString(); state.tracksQueued = 0;
+    saveState();
+    setImmediate(() => ensureQueueDepth().catch(() => {}));
+    return { content: [{ type: 'text', text: JSON.stringify({ mood, energy: MOOD_PROFILES[mood].energy, keywords: MOOD_PROFILES[mood].keywords, setAt: state.moodSetAt }, null, 2) }] };
+  }
+);
+
+server.tool('get_mood', 'Get current mood state and queue depth.', {}, async () => {
+  let queueDepth = 0;
+  try { queueDepth = ((await spotifyFetch('/me/player/queue'))?.queue ?? []).length; } catch (_) {}
+  return { content: [{ type: 'text', text: JSON.stringify({ mood: state.mood ?? 'none', energy: state.mood ? MOOD_PROFILES[state.mood]?.energy : null, setAt: state.moodSetAt, tracksQueued: state.tracksQueued, queueDepth, seenTracks: state.seenTrackIds.size }, null, 2) }] };
 });
 
-// --- Playback Tools ---
+server.tool('detect_vibe',
+  'Analyze session context, set the mood, and start playing matching music. Call this at session start and whenever the vibe shifts. Always auto-applies and plays — no need to call set_mood or play separately.',
+  {
+    context:    z.string().describe('Description of current session: task, energy, time, what user said'),
+    auto_apply: z.boolean().default(true).describe('Automatically apply mood and start playing (default true)'),
+  },
+  async ({ context, auto_apply }) => {
+    const { recommended, scores } = detectMood(context);
+    const previousMood = state.mood;
 
-server.tool('get_current_track', 'Get the currently playing track', {}, async () => {
-  const result = await withAuth(() => spotify.getMyCurrentPlaybackState());
-  return { content: [{ type: 'text', text: JSON.stringify(formatPlaybackState(result.body), null, 2) }] };
-});
+    if (auto_apply) {
+      state.mood = recommended; state.moodSetAt = new Date().toISOString(); state.tracksQueued = 0;
+      saveState();
 
-server.tool('play', 'Resume playback or play a specific track/album/playlist. Single tracks auto-queue similar songs so music keeps flowing.', {
-  uri: z.string().optional().describe('Spotify URI to play (track, album, playlist). Leave empty to resume.'),
-  device_id: z.string().optional().describe('Device ID to play on'),
-}, async ({ uri, device_id }) => {
-  const options = {};
-  if (device_id) options.device_id = device_id;
-  if (uri) {
-    if (uri.includes(':track:')) {
-      options.uris = [uri];
-    } else {
-      options.context_uri = uri;
-    }
-  }
-  await withAuth(() => spotify.play(options));
+      // Check if anything is currently playing
+      let isPlaying = false;
+      try {
+        const current = await spotifyFetch('/me/player');
+        isPlaying = current?.is_playing === true;
+      } catch (_) {}
 
-  // Auto-queue recommendations so music keeps flowing
-  // Works for: playing a single track, or resuming (grabs current track as seed)
-  let seedTrackId = null;
-  if (uri && uri.includes(':track:')) {
-    seedTrackId = uri.split(':').pop();
-  } else if (!uri) {
-    // Resuming — check if current context is a single track (no album/playlist)
-    try {
-      await new Promise(r => setTimeout(r, 500));
-      const state = await withAuth(() => spotify.getMyCurrentPlaybackState());
-      if (state.body?.item && !state.body.context) {
-        seedTrackId = state.body.item.id;
-      }
-    } catch (_) {}
-  }
-
-  if (seedTrackId) {
-    try {
-      // Give Spotify a moment to register playback before queueing
-      if (uri) await new Promise(r => setTimeout(r, 1000));
-      const recs = await withAuth(() => spotify.getRecommendations({ seed_tracks: [seedTrackId], limit: 20 }));
-      let queued = 0;
-      for (const track of recs.body.tracks) {
+      // Always play when detect_vibe is called explicitly — user wants a vibe switch
+      if (true || !isPlaying || previousMood !== recommended) {
         try {
-          await withAuth(() => spotify.addToQueue(track.uri));
-          queued++;
-        } catch (_) {
-          // Individual queue add failed, keep going
-        }
+          const profile  = MOOD_PROFILES[recommended];
+          const keyword  = profile.keywords[Math.floor(Math.random() * profile.keywords.length)];
+          const sr       = await spotifyFetch('/search', { query: { q: keyword, type: 'playlist', limit: 8 } });
+          const lists    = (sr?.playlists?.items ?? []).filter(p => p?.uri);
+          if (lists.length) {
+            const pick = lists[Math.floor(Math.random() * Math.min(lists.length, 4))];
+            await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri } });
+            await new Promise(r => setTimeout(r, 800));
+            setImmediate(() => ensureQueueDepth().catch(() => {}));
+            const current = await spotifyFetch('/me/player');
+            return { content: [{ type: 'text', text: JSON.stringify({ recommended_mood: recommended, auto_applied: true, energy: MOOD_PROFILES[recommended]?.energy, now_playing: current?.item ? { name: current.item.name, artist: current.item.artists?.map(a => a.name).join(', ') } : null, playlist: pick.name, scores }, null, 2) }] };
+          }
+        } catch (_) {}
       }
-      if (queued > 0) {
-        return { content: [{ type: 'text', text: uri ? `Playing: ${uri} (${queued} similar tracks queued)` : `Resumed playback (${queued} similar tracks queued)` }] };
-      }
-    } catch (_) {
-      // Recommendations failed — music still plays
-    }
-  }
 
-  return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed playback' }] };
+      setImmediate(() => ensureQueueDepth().catch(() => {}));
+    }
+
+    return { content: [{ type: 'text', text: JSON.stringify({ recommended_mood: recommended, auto_applied: auto_apply, energy: MOOD_PROFILES[recommended]?.energy, scores, context_received: context }, null, 2) }] };
+  }
+);
+
+server.tool('clear_session', 'Reset seen tracks and session state. Use when starting a fresh listen.', {}, async () => {
+  state.seenTrackIds = new Set(); state.seedTrackIds = []; state.seedArtistIds = []; state.tracksQueued = 0;
+  saveState();
+  return { content: [{ type: 'text', text: 'Session cleared.' }] };
 });
 
-server.tool('pause', 'Pause playback', {}, async () => {
-  await withAuth(() => spotify.pause());
+// ── Prefs ─────────────────────────────────────────────────────────────────────
+
+server.tool('get_prefs', 'Get current user preferences from .spotify-prefs.json.', {}, async () => {
+  return { content: [{ type: 'text', text: JSON.stringify(prefs, null, 2) }] };
+});
+
+server.tool('update_prefs',
+  'Update user preferences. Saves to .spotify-prefs.json so they persist and can be shared.',
+  {
+    startup_mood:           z.string().optional().describe('Mood to apply when server starts (mood name or empty string to clear)'),
+    startup_song:           z.string().optional().describe('Spotify track URI to play at startup'),
+    add_blacklist_artist:   z.string().optional().describe('Artist name to never queue'),
+    remove_blacklist_artist:z.string().optional().describe('Artist name to remove from blacklist'),
+    add_blacklist_track:    z.string().optional().describe('Track ID to never queue'),
+    remove_blacklist_track: z.string().optional().describe('Track ID to remove from blacklist'),
+  },
+  async ({ startup_mood, startup_song, add_blacklist_artist, remove_blacklist_artist, add_blacklist_track, remove_blacklist_track }) => {
+    if (startup_mood !== undefined) prefs.startup_mood = MOOD_PROFILES[startup_mood] ? startup_mood : null;
+    if (startup_song !== undefined) prefs.startup_song = startup_song || null;
+    if (add_blacklist_artist)    prefs.blacklist_artists = [...new Set([...(prefs.blacklist_artists ?? []), add_blacklist_artist])];
+    if (remove_blacklist_artist) prefs.blacklist_artists = (prefs.blacklist_artists ?? []).filter(a => a !== remove_blacklist_artist);
+    if (add_blacklist_track)     prefs.blacklist_tracks  = [...new Set([...(prefs.blacklist_tracks  ?? []), add_blacklist_track])];
+    if (remove_blacklist_track)  prefs.blacklist_tracks  = (prefs.blacklist_tracks  ?? []).filter(t => t !== remove_blacklist_track);
+    savePrefs();
+    return { content: [{ type: 'text', text: JSON.stringify(prefs, null, 2) }] };
+  }
+);
+
+// ── Playback ──────────────────────────────────────────────────────────────────
+
+server.tool('get_current_track', 'Get currently playing track and playback state.', {}, async () => {
+  const data = await spotifyFetch('/me/player');
+  return { content: [{ type: 'text', text: JSON.stringify(fmtPlayback(data), null, 2) }] };
+});
+
+server.tool('play',
+  'Resume playback or play a specific URI. Auto-fills the queue with mood-matched tracks.',
+  { uri: z.string().optional().describe('Spotify URI (track, album, playlist). Omit to resume.'), device_id: z.string().optional() },
+  async ({ uri, device_id }) => {
+    const body = {}; const query = device_id ? { device_id } : {};
+    if (uri) { if (uri.includes(':track:')) body.uris = [uri]; else body.context_uri = uri; }
+    await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
+    if (uri) await new Promise(r => setTimeout(r, 1000));
+    let seedId = uri?.includes(':track:') ? uri.split(':').pop() : null;
+    if (!seedId) {
+      try {
+        await new Promise(r => setTimeout(r, 500));
+        const curr = await spotifyFetch('/me/player');
+        if (curr?.item) { seedId = curr.item.id; updateSeeds([curr.item]); }
+      } catch (_) {}
+    }
+    const qr = await ensureQueueDepth();
+    return { content: [{ type: 'text', text: (uri ? `Playing: ${uri}` : 'Resumed') + (qr.refilled ? ` (+${qr.added} tracks queued)` : '') }] };
+  }
+);
+
+server.tool('pause', 'Pause playback.', {}, async () => {
+  await spotifyFetch('/me/player/pause', { method: 'PUT' });
   return { content: [{ type: 'text', text: 'Paused' }] };
 });
 
-server.tool('next_track', 'Skip to next track', {}, async () => {
-  await withAuth(() => spotify.skipToNext());
-  // Brief delay then fetch what's playing
-  await new Promise(r => setTimeout(r, 500));
-  const result = await withAuth(() => spotify.getMyCurrentPlaybackState());
-  return { content: [{ type: 'text', text: JSON.stringify(formatPlaybackState(result.body), null, 2) }] };
-});
-
-server.tool('previous_track', 'Go to previous track', {}, async () => {
-  await withAuth(() => spotify.skipToPrevious());
-  await new Promise(r => setTimeout(r, 500));
-  const result = await withAuth(() => spotify.getMyCurrentPlaybackState());
-  return { content: [{ type: 'text', text: JSON.stringify(formatPlaybackState(result.body), null, 2) }] };
-});
-
-server.tool('set_volume', 'Set playback volume (0-100)', {
-  volume: z.number().min(0).max(100).describe('Volume percentage'),
-}, async ({ volume }) => {
-  await withAuth(() => spotify.setVolume(volume));
-  return { content: [{ type: 'text', text: `Volume set to ${volume}%` }] };
-});
-
-server.tool('toggle_shuffle', 'Turn shuffle on or off', {
-  enabled: z.boolean().describe('true to enable shuffle, false to disable'),
-}, async ({ enabled }) => {
-  await withAuth(() => spotify.setShuffle(enabled));
-  return { content: [{ type: 'text', text: `Shuffle ${enabled ? 'on' : 'off'}` }] };
-});
-
-server.tool('set_repeat', 'Set repeat mode', {
-  mode: z.enum(['off', 'track', 'context']).describe('off, track, or context (album/playlist)'),
-}, async ({ mode }) => {
-  await withAuth(() => spotify.setRepeat(mode));
-  return { content: [{ type: 'text', text: `Repeat: ${mode}` }] };
-});
-
-server.tool('seek', 'Seek to position in current track', {
-  position_seconds: z.number().min(0).describe('Position in seconds'),
-}, async ({ position_seconds }) => {
-  await withAuth(() => spotify.seek(position_seconds * 1000));
-  return { content: [{ type: 'text', text: `Seeked to ${Math.floor(position_seconds / 60)}:${String(Math.floor(position_seconds % 60)).padStart(2, '0')}` }] };
-});
-
-server.tool('add_to_queue', 'Add a track to the playback queue', {
-  uri: z.string().describe('Spotify track URI (spotify:track:xxxx)'),
-}, async ({ uri }) => {
-  await withAuth(() => spotify.addToQueue(uri));
-  return { content: [{ type: 'text', text: `Added to queue: ${uri}` }] };
-});
-
-server.tool('get_queue', 'Get the current playback queue', {}, async () => {
-  const result = await withAuth(() => spotify.getMyCurrentPlaybackState());
-  // The spotify-web-api-node doesn't have a queue endpoint, so we use a raw request
-  await ensureAuth();
-  const response = await fetch('https://api.spotify.com/v1/me/player/queue', {
-    headers: { Authorization: `Bearer ${spotify.getAccessToken()}` },
-  });
-  const data = await response.json();
-  const queue = {
-    currently_playing: data.currently_playing ? formatTrack(data.currently_playing) : null,
-    queue: (data.queue || []).slice(0, 20).map(formatTrack),
-  };
-  return { content: [{ type: 'text', text: JSON.stringify(queue, null, 2) }] };
-});
-
-server.tool('get_devices', 'List available playback devices', {}, async () => {
-  const result = await withAuth(() => spotify.getMyDevices());
-  const devices = result.body.devices.map(d => ({
-    id: d.id,
-    name: d.name,
-    type: d.type,
-    active: d.is_active,
-    volume: d.volume_percent,
-  }));
-  return { content: [{ type: 'text', text: JSON.stringify(devices, null, 2) }] };
-});
-
-server.tool('transfer_playback', 'Transfer playback to a different device', {
-  device_id: z.string().describe('Device ID to transfer to'),
-}, async ({ device_id }) => {
-  await withAuth(() => spotify.transferMyPlayback([device_id]));
-  return { content: [{ type: 'text', text: `Transferred playback to device ${device_id}` }] };
-});
-
-// --- Search ---
-
-server.tool('search', 'Search Spotify for tracks, artists, albums, or playlists', {
-  query: z.string().describe('Search query'),
-  type: z.enum(['track', 'artist', 'album', 'playlist']).default('track').describe('Type to search for'),
-  limit: z.number().min(1).max(20).default(10).describe('Number of results'),
-}, async ({ query, type, limit }) => {
-  const types = [type];
-  const result = await withAuth(() => spotify.search(query, types, { limit }));
-
-  let items = [];
-  if (type === 'track' && result.body.tracks) {
-    items = result.body.tracks.items.map(formatTrack);
-  } else if (type === 'artist' && result.body.artists) {
-    items = result.body.artists.items.map(a => ({
-      name: a.name,
-      genres: a.genres,
-      followers: a.followers?.total,
-      popularity: a.popularity,
-      uri: a.uri,
-      url: a.external_urls?.spotify,
-    }));
-  } else if (type === 'album' && result.body.albums) {
-    items = result.body.albums.items.map(a => ({
-      name: a.name,
-      artist: a.artists.map(ar => ar.name).join(', '),
-      release_date: a.release_date,
-      total_tracks: a.total_tracks,
-      uri: a.uri,
-      url: a.external_urls?.spotify,
-    }));
-  } else if (type === 'playlist' && result.body.playlists) {
-    items = result.body.playlists.items.map(p => ({
-      name: p.name,
-      owner: p.owner?.display_name,
-      tracks: p.tracks?.total,
-      uri: p.uri,
-      url: p.external_urls?.spotify,
-    }));
+server.tool('next_track', 'Skip to next track. Auto-refills queue if running low.', {}, async () => {
+  const before = await spotifyFetch('/me/player');
+  const beforeId = before?.item?.id;
+  await spotifyFetch('/me/player/next', { method: 'POST' });
+  let result;
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 600));
+    result = await spotifyFetch('/me/player');
+    if (result?.item?.id && result.item.id !== beforeId) break;
   }
+  if (result?.item) updateSeeds([result.item]);
+  const qr  = await ensureQueueDepth();
+  const out = fmtPlayback(result);
+  if (qr.refilled) out.queue_refilled = qr.added;
+  return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+});
+
+server.tool('previous_track', 'Go to previous track.', {}, async () => {
+  const before = await spotifyFetch('/me/player');
+  const beforeId = before?.item?.id;
+  await spotifyFetch('/me/player/previous', { method: 'POST' });
+  let result;
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 600));
+    result = await spotifyFetch('/me/player');
+    if (result?.item?.id && result.item.id !== beforeId) break;
+  }
+  if (result?.item) updateSeeds([result.item]);
+  return { content: [{ type: 'text', text: JSON.stringify(fmtPlayback(result), null, 2) }] };
+});
+
+server.tool('set_volume',   'Set volume 0-100.',        { volume: z.number().min(0).max(100) }, async ({ volume }) => { await spotifyFetch('/me/player/volume',  { method: 'PUT', query: { volume_percent: volume } }); return { content: [{ type: 'text', text: `Volume: ${volume}%` }] }; });
+server.tool('toggle_shuffle','Enable or disable shuffle.',{ enabled: z.boolean() },             async ({ enabled }) => { await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: enabled } });         return { content: [{ type: 'text', text: `Shuffle: ${enabled ? 'on' : 'off'}` }] }; });
+server.tool('set_repeat',   'Set repeat mode.',          { mode: z.enum(['off', 'track', 'context']) }, async ({ mode }) => { await spotifyFetch('/me/player/repeat', { method: 'PUT', query: { state: mode } }); return { content: [{ type: 'text', text: `Repeat: ${mode}` }] }; });
+server.tool('seek',         'Seek to position in seconds.',{ position_seconds: z.number().min(0) }, async ({ position_seconds }) => { await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: Math.round(position_seconds * 1000) } }); return { content: [{ type: 'text', text: `Seeked to ${fmtMs(position_seconds * 1000)}` }] }; });
+server.tool('add_to_queue', 'Add a track URI to the queue.', { uri: z.string() }, async ({ uri }) => { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri } }); return { content: [{ type: 'text', text: `Queued: ${uri}` }] }; });
+
+server.tool('get_queue', 'Get the current playback queue.', {}, async () => {
+  const data = await spotifyFetch('/me/player/queue');
+  return { content: [{ type: 'text', text: JSON.stringify({ currently_playing: fmtTrack(data?.currently_playing), queue: (data?.queue ?? []).slice(0, 20).map(fmtTrack) }, null, 2) }] };
+});
+
+server.tool('get_devices', 'List available playback devices.', {}, async () => {
+  const data = await spotifyFetch('/me/player/devices');
+  return { content: [{ type: 'text', text: JSON.stringify((data?.devices ?? []).map(d => ({ id: d.id, name: d.name, type: d.type, active: d.is_active, volume: d.volume_percent })), null, 2) }] };
+});
+
+server.tool('transfer_playback', 'Transfer playback to a device.', { device_id: z.string() }, async ({ device_id }) => {
+  await spotifyFetch('/me/player', { method: 'PUT', body: { device_ids: [device_id] } });
+  return { content: [{ type: 'text', text: `Transferred to ${device_id}` }] };
+});
+
+// ── Search + Library ──────────────────────────────────────────────────────────
+
+server.tool('search', 'Search tracks, artists, albums, or playlists.', {
+  query: z.string(), type: z.enum(['track', 'artist', 'album', 'playlist']).default('track'), limit: z.number().min(1).max(20).default(10),
+}, async ({ query, type, limit }) => {
+  const data = await spotifyFetch('/search', { query: { q: query, type, limit } });
+  let items = [];
+  if (type === 'track')    items = (data?.tracks?.items    ?? []).map(fmtTrack);
+  else if (type === 'artist')   items = (data?.artists?.items  ?? []).map(a => ({ name: a.name, genres: a.genres, followers: a.followers?.total, popularity: a.popularity, uri: a.uri }));
+  else if (type === 'album')    items = (data?.albums?.items   ?? []).map(a => ({ name: a.name, artist: a.artists?.map(ar => ar.name).join(', '), release_date: a.release_date, total_tracks: a.total_tracks, uri: a.uri }));
+  else if (type === 'playlist') items = (data?.playlists?.items ?? []).filter(p => p).map(p => ({ name: p.name, owner: p.owner?.display_name, tracks: p.tracks?.total, uri: p.uri }));
   return { content: [{ type: 'text', text: JSON.stringify(items, null, 2) }] };
 });
 
-// --- Library ---
-
-server.tool('get_playlists', 'Get your playlists', {
-  limit: z.number().min(1).max(50).default(20).describe('Number of playlists to return'),
-}, async ({ limit }) => {
-  const result = await withAuth(() => spotify.getUserPlaylists({ limit }));
-  const playlists = result.body.items.map(p => ({
-    name: p.name,
-    tracks: p.tracks?.total,
-    owner: p.owner?.display_name,
-    uri: p.uri,
-    url: p.external_urls?.spotify,
-  }));
-  return { content: [{ type: 'text', text: JSON.stringify(playlists, null, 2) }] };
+server.tool('get_playlists', 'Get your playlists.', { limit: z.number().min(1).max(50).default(20) }, async ({ limit }) => {
+  const data = await spotifyFetch('/me/playlists', { query: { limit } });
+  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(p => ({ name: p.name, tracks: p.tracks?.total, owner: p.owner?.display_name, uri: p.uri, url: p.external_urls?.spotify })), null, 2) }] };
 });
 
-server.tool('get_playlist_tracks', 'Get tracks in a playlist', {
-  playlist_id: z.string().describe('Playlist ID or URI'),
-  limit: z.number().min(1).max(50).default(30).describe('Number of tracks'),
-}, async ({ playlist_id, limit }) => {
-  // Extract ID from URI if needed
+server.tool('get_playlist_tracks', 'Get tracks in a playlist.', { playlist_id: z.string(), limit: z.number().min(1).max(50).default(30) }, async ({ playlist_id, limit }) => {
   const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
-  const result = await withAuth(() => spotify.getPlaylistTracks(id, { limit }));
-  const tracks = result.body.items
-    .filter(item => item.track)
-    .map(item => ({
-      ...formatTrack(item.track),
-      added_at: item.added_at,
-      added_by: item.added_by?.id,
-    }));
-  return { content: [{ type: 'text', text: JSON.stringify(tracks, null, 2) }] };
+  const data = await spotifyFetch(`/playlists/${id}/tracks`, { query: { limit } });
+  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).filter(i => i?.track).map(i => ({ ...fmtTrack(i.track), added_at: i.added_at })), null, 2) }] };
 });
 
-server.tool('create_playlist', 'Create a new playlist', {
-  name: z.string().describe('Playlist name'),
-  description: z.string().optional().describe('Playlist description'),
-  public: z.boolean().default(false).describe('Whether the playlist is public'),
-}, async ({ name, description, public: isPublic }) => {
-  const me = await withAuth(() => spotify.getMe());
-  const result = await withAuth(() =>
-    spotify.createPlaylist(me.body.id, name, { description: description || '', public: isPublic })
-  );
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        name: result.body.name,
-        uri: result.body.uri,
-        url: result.body.external_urls?.spotify,
-      }, null, 2),
-    }],
-  };
+server.tool('create_playlist', 'Create a new playlist.', { name: z.string(), description: z.string().optional(), public: z.boolean().default(false) }, async ({ name, description, public: pub }) => {
+  const me   = await spotifyFetch('/me');
+  const data = await spotifyFetch(`/users/${me.id}/playlists`, { method: 'POST', body: { name, description: description ?? '', public: pub } });
+  return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, uri: data.uri, url: data.external_urls?.spotify }, null, 2) }] };
 });
 
-server.tool('add_to_playlist', 'Add tracks to a playlist', {
-  playlist_id: z.string().describe('Playlist ID'),
-  uris: z.array(z.string()).describe('Array of Spotify track URIs'),
-}, async ({ playlist_id, uris }) => {
+server.tool('add_to_playlist', 'Add track URIs to a playlist.', { playlist_id: z.string(), uris: z.array(z.string()) }, async ({ playlist_id, uris }) => {
   const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
-  await withAuth(() => spotify.addTracksToPlaylist(id, uris));
-  return { content: [{ type: 'text', text: `Added ${uris.length} track(s) to playlist` }] };
+  await spotifyFetch(`/playlists/${id}/tracks`, { method: 'POST', body: { uris } });
+  return { content: [{ type: 'text', text: `Added ${uris.length} track(s)` }] };
 });
 
-// --- Saved Tracks ---
-
-server.tool('get_saved_tracks', 'Get your liked/saved tracks', {
-  limit: z.number().min(1).max(50).default(20).describe('Number of tracks'),
-  offset: z.number().min(0).default(0).describe('Offset for pagination'),
-}, async ({ limit, offset }) => {
-  const result = await withAuth(() => spotify.getMySavedTracks({ limit, offset }));
-  const tracks = result.body.items.map(item => ({
-    ...formatTrack(item.track),
-    saved_at: item.added_at,
-  }));
-  return { content: [{ type: 'text', text: JSON.stringify(tracks, null, 2) }] };
+server.tool('get_saved_tracks', 'Get liked/saved tracks.', { limit: z.number().min(1).max(50).default(20), offset: z.number().min(0).default(0) }, async ({ limit, offset }) => {
+  const data = await spotifyFetch('/me/tracks', { query: { limit, offset } });
+  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => ({ ...fmtTrack(i.track), saved_at: i.added_at })), null, 2) }] };
 });
 
-server.tool('save_track', 'Save/like a track', {
-  track_ids: z.array(z.string()).describe('Track IDs to save'),
-}, async ({ track_ids }) => {
-  await withAuth(() => spotify.addToMySavedTracks(track_ids));
-  return { content: [{ type: 'text', text: `Saved ${track_ids.length} track(s)` }] };
-});
+server.tool('save_track',         'Like/save tracks.',         { track_ids: z.array(z.string()) }, async ({ track_ids }) => { await spotifyFetch('/me/tracks', { method: 'PUT',    body: { ids: track_ids } }); return { content: [{ type: 'text', text: `Saved ${track_ids.length} track(s)` }] }; });
+server.tool('remove_saved_track', 'Unlike/remove saved tracks.', { track_ids: z.array(z.string()) }, async ({ track_ids }) => { await spotifyFetch('/me/tracks', { method: 'DELETE', body: { ids: track_ids } }); return { content: [{ type: 'text', text: `Removed ${track_ids.length} track(s)` }] }; });
 
-server.tool('remove_saved_track', 'Remove a track from saved/liked', {
-  track_ids: z.array(z.string()).describe('Track IDs to remove'),
-}, async ({ track_ids }) => {
-  await withAuth(() => spotify.removeFromMySavedTracks(track_ids));
-  return { content: [{ type: 'text', text: `Removed ${track_ids.length} track(s) from saved` }] };
-});
+// ── Discovery ─────────────────────────────────────────────────────────────────
 
-// --- Discovery ---
+server.tool('get_top_tracks',    'Get your top tracks.',   { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/tracks',   { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(fmtTrack), null, 2) }] }; });
+server.tool('get_top_artists',   'Get your top artists.',  { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/artists',  { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(a => ({ name: a.name, genres: a.genres, popularity: a.popularity, uri: a.uri })), null, 2) }] }; });
+server.tool('get_recently_played','Get recently played.', { limit: z.number().min(1).max(50).default(20) }, async ({ limit }) => { const data = await spotifyFetch('/me/player/recently-played', { query: { limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => ({ ...fmtTrack(i.track), played_at: i.played_at })), null, 2) }] }; });
 
-server.tool('get_recommendations', 'Get track recommendations based on seeds', {
-  seed_tracks: z.array(z.string()).optional().describe('Track IDs to seed (max 5 total seeds)'),
-  seed_artists: z.array(z.string()).optional().describe('Artist IDs to seed'),
-  seed_genres: z.array(z.string()).optional().describe('Genre names to seed'),
-  limit: z.number().min(1).max(50).default(20).describe('Number of recommendations'),
-}, async ({ seed_tracks, seed_artists, seed_genres, limit }) => {
-  const options = { limit };
-  if (seed_tracks) options.seed_tracks = seed_tracks;
-  if (seed_artists) options.seed_artists = seed_artists;
-  if (seed_genres) options.seed_genres = seed_genres;
-
-  const result = await withAuth(() => spotify.getRecommendations(options));
-  const tracks = result.body.tracks.map(formatTrack);
-  return { content: [{ type: 'text', text: JSON.stringify(tracks, null, 2) }] };
-});
-
-server.tool('get_top_tracks', 'Get your top tracks', {
-  time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term')
-    .describe('short_term (~4 weeks), medium_term (~6 months), long_term (all time)'),
-  limit: z.number().min(1).max(50).default(20).describe('Number of tracks'),
-}, async ({ time_range, limit }) => {
-  const result = await withAuth(() => spotify.getMyTopTracks({ time_range, limit }));
-  const tracks = result.body.items.map(formatTrack);
-  return { content: [{ type: 'text', text: JSON.stringify(tracks, null, 2) }] };
-});
-
-server.tool('get_top_artists', 'Get your top artists', {
-  time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term')
-    .describe('short_term (~4 weeks), medium_term (~6 months), long_term (all time)'),
-  limit: z.number().min(1).max(50).default(20).describe('Number of artists'),
-}, async ({ time_range, limit }) => {
-  const result = await withAuth(() => spotify.getMyTopArtists({ time_range, limit }));
-  const artists = result.body.items.map(a => ({
-    name: a.name,
-    genres: a.genres,
-    popularity: a.popularity,
-    uri: a.uri,
-    url: a.external_urls?.spotify,
-  }));
-  return { content: [{ type: 'text', text: JSON.stringify(artists, null, 2) }] };
-});
-
-server.tool('get_recently_played', 'Get recently played tracks', {
-  limit: z.number().min(1).max(50).default(20).describe('Number of tracks'),
-}, async ({ limit }) => {
-  const result = await withAuth(() => spotify.getMyRecentlyPlayedTracks({ limit }));
-  const tracks = result.body.items.map(item => ({
-    ...formatTrack(item.track),
-    played_at: item.played_at,
-  }));
-  return { content: [{ type: 'text', text: JSON.stringify(tracks, null, 2) }] };
-});
-
-// --- Artist Info ---
-
-server.tool('get_artist', 'Get details about an artist', {
-  artist_id: z.string().describe('Artist ID or URI'),
-}, async ({ artist_id }) => {
+server.tool('get_artist', 'Get artist details and top tracks.', { artist_id: z.string() }, async ({ artist_id }) => {
   const id = artist_id.includes(':') ? artist_id.split(':').pop() : artist_id;
   const [artist, topTracks, albums] = await Promise.all([
-    withAuth(() => spotify.getArtist(id)),
-    withAuth(() => spotify.getArtistTopTracks(id, 'US')),
-    withAuth(() => spotify.getArtistAlbums(id, { limit: 10 })),
+    spotifyFetch(`/artists/${id}`),
+    spotifyFetch(`/artists/${id}/top-tracks`, { query: { market: 'US' } }),
+    spotifyFetch(`/artists/${id}/albums`, { query: { limit: 10 } }),
   ]);
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        name: artist.body.name,
-        genres: artist.body.genres,
-        followers: artist.body.followers?.total,
-        popularity: artist.body.popularity,
-        uri: artist.body.uri,
-        url: artist.body.external_urls?.spotify,
-        top_tracks: topTracks.body.tracks.map(formatTrack),
-        recent_albums: albums.body.items.map(a => ({
-          name: a.name,
-          release_date: a.release_date,
-          total_tracks: a.total_tracks,
-          uri: a.uri,
-        })),
-      }, null, 2),
-    }],
-  };
+  return { content: [{ type: 'text', text: JSON.stringify({ name: artist.name, genres: artist.genres, followers: artist.followers?.total, popularity: artist.popularity, uri: artist.uri, top_tracks: (topTracks?.tracks ?? []).map(fmtTrack), recent_albums: (albums?.items ?? []).map(a => ({ name: a.name, release_date: a.release_date, total_tracks: a.total_tracks, uri: a.uri })) }, null, 2) }] };
 });
 
-// --- Album ---
-
-server.tool('get_album', 'Get details about an album', {
-  album_id: z.string().describe('Album ID or URI'),
-}, async ({ album_id }) => {
-  const id = album_id.includes(':') ? album_id.split(':').pop() : album_id;
-  const result = await withAuth(() => spotify.getAlbum(id));
-  const album = result.body;
-  return {
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        name: album.name,
-        artist: album.artists.map(a => a.name).join(', '),
-        release_date: album.release_date,
-        total_tracks: album.total_tracks,
-        uri: album.uri,
-        url: album.external_urls?.spotify,
-        tracks: album.tracks.items.map(t => ({
-          name: t.name,
-          track_number: t.track_number,
-          duration: `${Math.floor(t.duration_ms / 60000)}:${String(Math.floor((t.duration_ms % 60000) / 1000)).padStart(2, '0')}`,
-          uri: t.uri,
-        })),
-      }, null, 2),
-    }],
-  };
+server.tool('get_album', 'Get album details and track list.', { album_id: z.string() }, async ({ album_id }) => {
+  const id   = album_id.includes(':') ? album_id.split(':').pop() : album_id;
+  const data = await spotifyFetch(`/albums/${id}`);
+  return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, artist: data.artists?.map(a => a.name).join(', '), release_date: data.release_date, total_tracks: data.total_tracks, uri: data.uri, url: data.external_urls?.spotify, tracks: (data.tracks?.items ?? []).map(t => ({ name: t.name, track_number: t.track_number, duration: fmtMs(t.duration_ms), uri: t.uri })) }, null, 2) }] };
 });
 
-// --- Start Server ---
+// ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function main() {
+  // If a startup song is set, queue it up as the first thing that plays
+  if (prefs.startup_song) {
+    try { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: prefs.startup_song } }); } catch (_) {}
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch(err => {
-  console.error('Server error:', err);
-  process.exit(1);
-});
+main().catch(err => { console.error('Server error:', err); process.exit(1); });

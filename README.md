@@ -1,29 +1,32 @@
 # spotify-mcp
 
-Spotify MCP server for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Control your music through natural language — play tracks, search, manage playlists, get recommendations, and more.
+Spotify MCP server for Claude Code. Detects your vibe from session context, keeps a mood-matched queue running, and controls everything through natural language.
 
-> **Note:** Spotify must be open and active on at least one device (phone, desktop app, or web player) for playback commands to work. This is a Spotify API limitation, not a limitation of this server.
+Every Claude Code session starts with **Back in Black**. You can change it.
 
-## What You Can Do
+---
 
-- **Playback** — play, pause, skip, seek, volume, shuffle, repeat
-- **Search** — find tracks, artists, albums, playlists
-- **Queue** — add tracks, view upcoming queue
-- **Playlists** — create, browse, add tracks
-- **Library** — liked songs, save/remove tracks
-- **Discovery** — recommendations, top tracks/artists, recently played
-- **Devices** — list devices, transfer playback
+## What it does
+
+- **Vibe detection** — Claude reads what you're working on and auto-picks the right music. Say "deep focus coding vibes" or "I just shipped" and it switches playlists immediately.
+- **Persistent mood** — mood and session state survive server restarts. Your grind session doesn't reset because you closed a tab.
+- **Smart queue** — never runs out. Pulls from your top tracks, artist catalogs, and mood-matched playlists. Same song never plays twice in a session.
+- **Fully configurable** — startup song, startup mood, per-mood playlist keywords, artist/track blacklist. All in `.spotify-prefs.json`.
+- **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024. Uses top tracks, artist catalogs, and playlist search only.
+
+---
+
+## Requirements
+
+- Node.js 18+
+- Spotify Premium account
+- Spotify Developer app (free, 2 minutes to create)
+
+---
 
 ## Setup
 
-### 1. Create a Spotify App
-
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Create a new app
-3. Set the **Redirect URI** to `http://127.0.0.1:8888/callback`
-4. Copy your **Client ID** and **Client Secret**
-
-### 2. Install
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/kaceburnette/spotify-mcp.git
@@ -31,7 +34,14 @@ cd spotify-mcp
 npm install
 ```
 
-### 3. Configure Credentials
+### 2. Create a Spotify app
+
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+2. Click **Create app**
+3. Add Redirect URI: `http://127.0.0.1:8888/callback`
+4. Copy your **Client ID** and **Client Secret**
+
+### 3. Add credentials
 
 Create `.spotify-config.json` in the project root:
 
@@ -45,86 +55,192 @@ Create `.spotify-config.json` in the project root:
 ### 4. Authenticate
 
 ```bash
-npm run auth
+node auth-setup.js
 ```
 
-This opens your browser for Spotify login. After authorizing, tokens are saved locally to `.spotify-tokens.json`. You only need to do this once — tokens auto-refresh.
+Browser opens, you click Agree, done. Tokens saved to `.spotify-tokens.json` and auto-refresh forever. One-time setup.
 
 ### 5. Add to Claude Code
 
 ```bash
-claude mcp add spotify -- node /path/to/spotify-mcp/server.js
+claude mcp add spotify -- node /absolute/path/to/spotify-mcp/server.js
 ```
 
-Or add it manually to your Claude Code MCP config:
+Or add manually to `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "spotify": {
       "command": "node",
-      "args": ["/path/to/spotify-mcp/server.js"]
+      "args": ["/absolute/path/to/spotify-mcp/server.js"]
     }
   }
 }
 ```
 
-Then restart Claude Code.
+Restart Claude Code. Back in Black plays. You're in.
 
-## Usage
+---
 
-Just talk to Claude naturally:
+## Configure your setup
 
-- "What's playing on Spotify?"
-- "Play some Zach Bryan"
-- "Skip this track"
-- "Create a playlist called Road Trip and add the last 5 songs I played"
-- "What are my top artists this month?"
-- "Turn the volume down to 40"
-- "Search for lo-fi playlists"
+Copy the example file and edit it:
 
-## Tools
+```bash
+cp spotify-prefs.example.json .spotify-prefs.json
+```
 
-| Tool | Description |
-|------|-------------|
-| `get_current_track` | Currently playing track |
-| `play` | Resume or play a specific track/album/playlist |
-| `pause` | Pause playback |
-| `next_track` | Skip forward |
-| `previous_track` | Skip back |
-| `set_volume` | Set volume (0-100) |
-| `toggle_shuffle` | Toggle shuffle on/off |
-| `set_repeat` | Set repeat mode (off/track/context) |
-| `seek` | Seek to position in track |
-| `add_to_queue` | Add track to queue |
-| `get_queue` | View playback queue |
-| `get_devices` | List available devices |
-| `transfer_playback` | Move playback to another device |
+```json
+{
+  "startup_song": "spotify:track:08mG3Y1vljYA6bvDt4Wqkj",
+  "startup_mood": "grind",
+  "mood_overrides": {
+    "grind": {
+      "keywords": ["dark techno focus", "coding beats instrumental"]
+    }
+  },
+  "blacklist_artists": ["Artist Name Here"],
+  "blacklist_tracks": []
+}
+```
+
+| Field | What it does | Default |
+|---|---|---|
+| `startup_song` | Track URI played every time the server starts | Back in Black — AC/DC |
+| `startup_mood` | Mood applied on boot | `grind` |
+| `mood_overrides` | Custom playlist search keywords per mood | See example file |
+| `blacklist_artists` | These artists never get queued (substring match) | `[]` |
+| `blacklist_tracks` | These track IDs never get queued | `[]` |
+
+Changes take effect on next MCP reconnect.
+
+You can also update config by telling Claude:
+- *"blacklist [artist name]"*
+- *"set my startup mood to focus"*
+- *"change my startup song to [song]"*
+
+---
+
+## Vibe detection
+
+Claude reads your session — open files, what you're building, recent commits, what you said — and calls `detect_vibe` automatically. It scores keywords, applies time-of-day signals, picks a mood, searches for a matching playlist, and plays it. One call does everything.
+
+**Explicit phrases always win:**
+
+| Say this | Gets this |
+|---|---|
+| "deep code focus work vibes" | `focus` — lo-fi instrumental |
+| "lock in" / "locked in" | `lock_in` — dark techno |
+| "I just shipped" / "just merged" | `hype` — rap/trap |
+| "CEO energy" / "boss vibes" | `confident` — power hip hop |
+| "night drive vibes" | `night_drive` — synthwave |
+| "chill out" | `chill` — R&B/soul |
+| "I'm debugging a prod issue" | `lock_in` — auto-detected |
+| "wrapping up for the day" | `wind_down` — ambient |
+
+---
+
+## Moods
+
+| Mood | Energy | Sounds like |
+|---|---|---|
+| `grind` | high | dark electronic, coding beats |
+| `focus` | medium | lo-fi, ambient instrumental, deep work |
+| `lock_in` | high | techno, drum & bass, industrial |
+| `hype` | high | rap, trap, high energy hip hop |
+| `pump_up` | high | motivational hip hop |
+| `workout` | max | gym rap, EDM, intense |
+| `confident` | high | boss rap, power R&B |
+| `creative` | medium | jazz, indie, alternative |
+| `chill` | low | R&B, soul, laid back hip hop |
+| `relax` | low | acoustic, mellow, soft |
+| `wind_down` | min | ambient, soft piano |
+| `background` | min | classical, ambient, cafe |
+| `night_drive` | medium | synthwave, dark electronic |
+| `in_my_feels` | low | emotional R&B, indie |
+| `sad` | low | sad indie, heartbreak |
+| `angry` | max | metal, hard rock, punk |
+
+---
+
+## Auto-detection setup (recommended)
+
+Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe automatically — no prompting needed:
+
+```markdown
+# Spotify — Auto Vibe
+- At the start of every session, call `detect_vibe` with context about what the user is working on, their energy, and time of day. Let it auto-apply the mood.
+- When the task or energy shifts significantly (debugging → shipped, coding → meeting), call `detect_vibe` again.
+- Never ask permission to set the mood — read the context and do it.
+```
+
+---
+
+## All tools
+
+| Tool | What it does |
+|---|---|
+| `detect_vibe` | Read session context → pick mood → find playlist → play it |
+| `set_mood` | Manually set mood by name |
+| `get_mood` | Current mood, queue depth, session stats |
+| `clear_session` | Reset seen tracks, start discovery fresh |
+| `get_prefs` | View current preferences |
+| `update_prefs` | Change startup song, startup mood, blacklists |
+| `play` | Play/resume. Pass a URI or leave empty to resume |
+| `pause` | Pause |
+| `next_track` | Skip. Auto-refills queue |
+| `previous_track` | Go back |
+| `set_volume` | 0–100 |
+| `toggle_shuffle` | On/off |
+| `set_repeat` | off / track / context |
+| `seek` | Jump to position in seconds |
+| `get_current_track` | What's playing right now |
+| `get_queue` | What's coming up |
+| `get_devices` | Available playback devices |
+| `transfer_playback` | Switch to a different device |
 | `search` | Search tracks, artists, albums, playlists |
 | `get_playlists` | Your playlists |
 | `get_playlist_tracks` | Tracks in a playlist |
-| `create_playlist` | Create a new playlist |
+| `create_playlist` | Make a new playlist |
 | `add_to_playlist` | Add tracks to a playlist |
-| `get_saved_tracks` | Liked/saved tracks |
+| `get_saved_tracks` | Your liked songs |
 | `save_track` | Like a track |
 | `remove_saved_track` | Unlike a track |
-| `get_recommendations` | Get recommendations from seed tracks/artists/genres |
-| `get_top_tracks` | Your most-played tracks |
-| `get_top_artists` | Your most-played artists |
-| `get_recently_played` | Recently played tracks |
-| `get_artist` | Artist details + top tracks + albums |
-| `get_album` | Album details + track listing |
+| `get_top_tracks` | Top tracks (short / medium / long term) |
+| `get_top_artists` | Top artists |
+| `get_recently_played` | Recent history |
+| `get_artist` | Artist info + top tracks + albums |
+| `get_album` | Album details + tracklist |
+| `add_to_queue` | Queue a specific track URI |
+
+---
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `server.js` | MCP server |
+| `auth-setup.js` | One-time OAuth setup |
+| `.spotify-config.json` | Client ID + Secret (**gitignored**) |
+| `.spotify-tokens.json` | Auth tokens, auto-managed (**gitignored**) |
+| `.spotify-prefs.json` | Your personal config (**gitignored**) |
+| `.spotify-state.json` | Mood + session state, persists across restarts (**gitignored**) |
+| `spotify-prefs.example.json` | Config template — copy to `.spotify-prefs.json` |
+
+---
 
 ## Troubleshooting
 
-**"No active device found"**
-Open Spotify on any device. The app needs to be running — even if paused — for the API to see it.
+**"No active device found"** — Open Spotify on any device. The app needs to be running (even paused) for the API to see it.
 
-**"No tokens found"**
-Run `npm run auth` to re-authenticate.
+**"No tokens found"** — Run `node auth-setup.js` to re-authenticate.
 
-**Token expired**
-Tokens auto-refresh. If something breaks, delete `.spotify-tokens.json` and run `npm run auth` again.
+**Music not switching on vibe change** — Make sure Spotify is open on a device. The API can't play to a closed app.
+
+**Want to reset the vibe** — Tell Claude `"clear session"` to wipe seen tracks and start discovery fresh.
+
+---
 
 ## License
 

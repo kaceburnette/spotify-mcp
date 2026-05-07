@@ -1,7 +1,7 @@
 {
   "name": "spotify-mcp",
-  "version": "1.0.0",
-  "description": "Spotify MCP server for Claude Code — control playback, search, manage playlists, and more through natural language.",
+  "version": "3.0.0",
+  "description": "Spotify MCP for Claude — mood-aware music, persistent vibe state, and smart queue management. Built for Claude Code.",
   "main": "server.js",
   "bin": {
     "spotify-mcp": "./server.js",
@@ -33,7 +33,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "express": "^5.2.1",
-    "open": "^11.0.0",
-    "spotify-web-api-node": "^5.0.2"
+    "open": "^11.0.0"
   }
 }

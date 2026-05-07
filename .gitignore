@@ -1,3 +1,5 @@
 node_modules/
 .spotify-config.json
 .spotify-tokens.json
+.spotify-state.json
+.spotify-prefs.json

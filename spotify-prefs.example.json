@@ -1,0 +1,23 @@
+{
+  "_readme": "Copy this file to .spotify-prefs.json to customize your setup. All fields are optional — defaults are used for anything not specified.",
+
+  "startup_mood": "grind",
+
+  "startup_song": "spotify:track:08mG3Y1vljYA6bvDt4Wqkj",
+
+  "mood_overrides": {
+    "grind": {
+      "keywords": ["dark electronic focus coding", "deep work techno instrumental", "coding electronic beats"]
+    },
+    "focus": {
+      "keywords": ["deep focus study concentration", "lo-fi study beats", "ambient focus instrumental"]
+    },
+    "hype": {
+      "keywords": ["hip hop hype energy 2024", "trap bangers rap", "high energy rap playlist"]
+    }
+  },
+
+  "blacklist_artists": [],
+
+  "blacklist_tracks": []
+}
