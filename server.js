@@ -398,6 +398,7 @@ server.tool('detect_vibe',
             const pick = lists[Math.floor(Math.random() * Math.min(lists.length, 4))];
             await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri } });
             await new Promise(r => setTimeout(r, 800));
+            await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true } }).catch(() => {});
             setImmediate(() => ensureQueueDepth().catch(() => {}));
             const current = await spotifyFetch('/me/player');
             return { content: [{ type: 'text', text: JSON.stringify({ recommended_mood: recommended, auto_applied: true, energy: MOOD_PROFILES[recommended]?.energy, now_playing: current?.item ? { name: current.item.name, artist: current.item.artists?.map(a => a.name).join(', ') } : null, playlist: pick.name, scores }, null, 2) }] };
@@ -460,7 +461,12 @@ server.tool('play',
     const body = {}; const query = device_id ? { device_id } : {};
     if (uri) { if (uri.includes(':track:')) body.uris = [uri]; else body.context_uri = uri; }
     await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
-    if (uri) await new Promise(r => setTimeout(r, 1000));
+    if (uri) {
+      await new Promise(r => setTimeout(r, 1000));
+      if (!uri.includes(':track:')) {
+        await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true } }).catch(() => {});
+      }
+    }
     let seedId = uri?.includes(':track:') ? uri.split(':').pop() : null;
     if (!seedId) {
       try {
