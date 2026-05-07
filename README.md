@@ -182,7 +182,9 @@ Claude reads your session — open files, what you're building, recent commits, 
 
 ## Auto-detection setup (recommended)
 
-Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe automatically — no prompting needed:
+**Shortcut:** Just tell Claude — *"read the spotify-mcp README and follow the setup instructions"* — and it'll handle everything below automatically.
+
+Or add this manually to `~/.claude/CLAUDE.md`:
 
 ```markdown
 # Spotify — Auto Vibe
