@@ -1170,6 +1170,21 @@ async function main() {
   if (prefs.startup_song) {
     try { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: prefs.startup_song } }); } catch (_) {}
   }
+
+  // Auto-start DJ engine on every boot — survives MCP reconnects without manual 'start engine'
+  if (djEngine) {
+    try {
+      await djEngine.start();
+      setTimeout(async () => {
+        try {
+          const devices = await spotifyFetch('/me/player/devices');
+          const eng = (devices?.devices ?? []).find(d => d.name === 'spotify-mcp DJ');
+          if (eng) await spotifyFetch('/me/player', { method: 'PUT', body: { device_ids: [eng.id] } });
+        } catch (_) {}
+      }, 2000);
+    } catch (_) {}
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
