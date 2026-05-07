@@ -52,9 +52,13 @@ async function start(deviceName = DEVICE_NAME) {
   _speaker   = new Speaker({ channels: 2, bitDepth: 16, sampleRate: 44100, signed: true });
   _librespot = spawn(librespotBin, librespotArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-  _librespot.stdout.pipe(_engine).pipe(_speaker);
+  _speaker.on('error', err => process.stderr.write('[speaker] ' + err.message + '\n'));
+  _engine.on('error',  err => process.stderr.write('[engine] '  + err.message + '\n'));
+  _librespot.on('error', err => process.stderr.write('[librespot] ' + err.message + '\n'));
   _librespot.stderr.on('data', d => process.stderr.write('[librespot] ' + d));
   _librespot.on('exit', () => { if (_active) _active = false; });
+
+  _librespot.stdout.pipe(_engine).pipe(_speaker);
 
   _active = true;
   return _engine;
@@ -63,8 +67,10 @@ async function start(deviceName = DEVICE_NAME) {
 /** Stop the engine and kill all child processes. */
 async function stop() {
   _active = false;
+  try { _librespot?.stdout?.unpipe(); } catch (_) {}
+  try { _engine?.unpipe(); }           catch (_) {}
   _librespot?.kill();
-  _speaker?.end();
+  try { _speaker?.end(); }             catch (_) {}
   _librespot = null;
   _speaker   = null;
   _engine    = null;
