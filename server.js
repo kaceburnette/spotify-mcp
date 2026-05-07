@@ -172,6 +172,33 @@ function saveState() {
   }, null, 2));
 }
 
+async function getDeviceId() {
+  try {
+    const devs = await spotifyFetch('/me/player/devices');
+    const list = devs?.devices ?? [];
+    const active = list.find(d => d.is_active) ?? list[0];
+    return active?.id ?? null;
+  } catch (_) { return null; }
+}
+
+async function playMood(mood) {
+  const profile = MOOD_PROFILES[mood];
+  if (!profile) return null;
+  const keyword = profile.keywords[Math.floor(Math.random() * profile.keywords.length)];
+  const sr = await spotifyFetch('/search', { query: { q: keyword, type: 'playlist', limit: 8 } });
+  const lists = (sr?.playlists?.items ?? []).filter(p => p?.uri);
+  if (!lists.length) return null;
+  const pick = lists[Math.floor(Math.random() * Math.min(lists.length, 4))];
+  const deviceId = await getDeviceId();
+  const query = deviceId ? { device_id: deviceId } : {};
+  await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri }, query });
+  await new Promise(r => setTimeout(r, 800));
+  await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true, ...(deviceId ? { device_id: deviceId } : {}) } }).catch(() => {});
+  setImmediate(() => ensureQueueDepth().catch(() => {}));
+  const current = await spotifyFetch('/me/player');
+  return { playlist: pick.name, now_playing: current?.item ? { name: current.item.name, artist: current.item.artists?.map(a => a.name).join(', ') } : null };
+}
+
 // --- Discovery Engine ---
 // No /recommendations (deprecated Nov 2024). Three sources:
 // 1. Personal top tracks — what you actually listen to
@@ -369,8 +396,9 @@ server.tool('set_mood',
   async ({ mood }) => {
     state.mood = mood; state.moodSetAt = new Date().toISOString(); state.tracksQueued = 0;
     saveState();
-    setImmediate(() => ensureQueueDepth().catch(() => {}));
-    return { content: [{ type: 'text', text: JSON.stringify({ mood, energy: MOOD_PROFILES[mood].energy, keywords: MOOD_PROFILES[mood].keywords, setAt: state.moodSetAt }, null, 2) }] };
+    let playing = null;
+    try { playing = await playMood(mood); } catch (_) {}
+    return { content: [{ type: 'text', text: JSON.stringify({ mood, energy: MOOD_PROFILES[mood].energy, setAt: state.moodSetAt, ...(playing ?? {}) }, null, 2) }] };
   }
 );
 
@@ -401,24 +429,12 @@ server.tool('detect_vibe',
         isPlaying = current?.is_playing === true;
       } catch (_) {}
 
-      // Always play when detect_vibe is called explicitly — user wants a vibe switch
-      if (true || !isPlaying || previousMood !== recommended) {
-        try {
-          const profile  = MOOD_PROFILES[recommended];
-          const keyword  = profile.keywords[Math.floor(Math.random() * profile.keywords.length)];
-          const sr       = await spotifyFetch('/search', { query: { q: keyword, type: 'playlist', limit: 8 } });
-          const lists    = (sr?.playlists?.items ?? []).filter(p => p?.uri);
-          if (lists.length) {
-            const pick = lists[Math.floor(Math.random() * Math.min(lists.length, 4))];
-            await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri } });
-            await new Promise(r => setTimeout(r, 800));
-            await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true } }).catch(() => {});
-            setImmediate(() => ensureQueueDepth().catch(() => {}));
-            const current = await spotifyFetch('/me/player');
-            return { content: [{ type: 'text', text: JSON.stringify({ recommended_mood: recommended, auto_applied: true, energy: MOOD_PROFILES[recommended]?.energy, now_playing: current?.item ? { name: current.item.name, artist: current.item.artists?.map(a => a.name).join(', ') } : null, playlist: pick.name, scores }, null, 2) }] };
-          }
-        } catch (_) {}
-      }
+      try {
+        const playing = await playMood(recommended);
+        if (playing) {
+          return { content: [{ type: 'text', text: JSON.stringify({ recommended_mood: recommended, auto_applied: true, energy: MOOD_PROFILES[recommended]?.energy, ...playing, scores }, null, 2) }] };
+        }
+      } catch (_) {}
 
       setImmediate(() => ensureQueueDepth().catch(() => {}));
     }
