@@ -722,17 +722,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Five real transition styles modeled on what DJs actually do at live sets
 // nextUri: if provided, plays that track directly (live DJ mode). Otherwise skips to queued next.
-async function performTransition(style, vol, nextUri = null) {
+async function performTransition(style, vol, nextUri = null, introSkipMs = 30000) {
   const playNext = nextUri
     ? async () => spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [nextUri] } })
     : async () => spotifyFetch('/me/player/next', { method: 'POST' });
+
+  const playAndSeek = async () => {
+    await playNext();
+    if (introSkipMs > 0) {
+      await sleep(350);
+      await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: introSkipMs } }).catch(() => {});
+    }
+  };
 
   switch (style) {
 
     case 'cut': {
       await setVol(0);
-      await playNext();
-      await sleep(400);
+      await playAndSeek();
+      await sleep(250);
       await setVol(vol);
       break;
     }
@@ -743,7 +751,7 @@ async function performTransition(style, vol, nextUri = null) {
         await setVol(vol); await sleep(80);
       }
       await setVol(0);
-      await playNext();
+      await playAndSeek();
       await sleep(400);
       for (let i = 1; i <= 8; i++) { await setVol(vol * i / 8); await sleep(120); }
       break;
@@ -752,7 +760,7 @@ async function performTransition(style, vol, nextUri = null) {
     case 'echo': {
       const echoes = [0.9, 0.5, 0.85, 0.4, 0.7, 0.25, 0.5, 0.1, 0];
       for (const level of echoes) { await setVol(vol * level); await sleep(150); }
-      await playNext();
+      await playAndSeek();
       await sleep(500);
       for (let i = 1; i <= 10; i++) { await setVol(vol * i / 10); await sleep(100); }
       break;
@@ -762,7 +770,7 @@ async function performTransition(style, vol, nextUri = null) {
       for (let i = 0; i <= 5; i++) { await setVol(Math.min(100, vol + (20 * i / 5))); await sleep(150); }
       await sleep(200);
       await setVol(0);
-      await playNext();
+      await playAndSeek();
       await sleep(400);
       for (let i = 1; i <= 8; i++) { await setVol(vol * i / 8); await sleep(150); }
       break;
@@ -771,7 +779,7 @@ async function performTransition(style, vol, nextUri = null) {
     case 'spinback': {
       // Rapid volume spiral down (simulates record spinning back), snap to next, slam back in
       for (let i = 10; i >= 0; i--) { await setVol(vol * i / 10); await sleep(60); }
-      await playNext();
+      await playAndSeek();
       await sleep(200);
       await setVol(vol);
       break;
@@ -780,7 +788,7 @@ async function performTransition(style, vol, nextUri = null) {
     case 'fade':
     default: {
       for (let i = 9; i >= 0; i--) { await setVol(vol * i / 10); await sleep(300); }
-      await playNext();
+      await playAndSeek();
       await sleep(600);
       for (let i = 1; i <= 10; i++) { await setVol(vol * i / 10); await sleep(300); }
       break;
