@@ -181,6 +181,18 @@ async function getDeviceId() {
   } catch (_) { return null; }
 }
 
+async function activateDevice() {
+  const devs = await spotifyFetch('/me/player/devices');
+  const list = devs?.devices ?? [];
+  if (!list.length) return null;
+  const device = list.find(d => d.is_active) ?? list[0];
+  if (!device.is_active) {
+    await spotifyFetch('/me/player', { method: 'PUT', body: { device_ids: [device.id], play: true } });
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return device.id;
+}
+
 async function playMood(mood) {
   const profile = MOOD_PROFILES[mood];
   if (!profile) return null;
@@ -189,9 +201,20 @@ async function playMood(mood) {
   const lists = (sr?.playlists?.items ?? []).filter(p => p?.uri);
   if (!lists.length) return null;
   const pick = lists[Math.floor(Math.random() * Math.min(lists.length, 4))];
-  const deviceId = await getDeviceId();
+
+  const deviceId = await activateDevice();
   const query = deviceId ? { device_id: deviceId } : {};
-  await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri }, query });
+
+  try {
+    await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri }, query });
+  } catch (err) {
+    // If still no active device, bail with a clear message
+    if (err?.message?.includes('NO_ACTIVE_DEVICE') || err?.message?.includes('404')) {
+      throw new Error('No active Spotify device found. Open the Spotify app on any device and try again.');
+    }
+    throw err;
+  }
+
   await new Promise(r => setTimeout(r, 800));
   await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true, ...(deviceId ? { device_id: deviceId } : {}) } }).catch(() => {});
   setImmediate(() => ensureQueueDepth().catch(() => {}));
