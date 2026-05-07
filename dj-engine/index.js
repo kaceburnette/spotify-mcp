@@ -13,8 +13,9 @@ const path       = require('path');
 const fs         = require('fs');
 const DJEngine   = require('./engine');
 
-const BIN_DIR    = path.join(__dirname, 'bin');
-const DEVICE_NAME = 'spotify-mcp DJ';
+const BIN_DIR      = path.join(__dirname, 'bin');
+const TOKENS_FILE  = path.join(__dirname, '..', '.spotify-tokens.json');
+const DEVICE_NAME  = 'spotify-mcp DJ';
 
 // Platform → output command that reads raw S16LE stereo 44100Hz from stdin
 const OUTPUT_CMD = {
@@ -41,16 +42,20 @@ async function start(deviceName = DEVICE_NAME) {
   if (!outputCfg) throw new Error(`Platform "${process.platform}" not yet supported. Supported: macOS, Linux.`);
 
   const librespotBin = _findLibrespot();
+  const accessToken  = _readAccessToken();
 
-  _engine    = new DJEngine();
-  _player    = spawn(outputCfg.cmd, outputCfg.args, { stdio: ['pipe', 'ignore', 'ignore'] });
-  _librespot = spawn(librespotBin, [
+  const librespotArgs = [
     '--backend',  'pipe',
     '--name',     deviceName,
     '--bitrate',  '320',
     '--disable-audio-cache',
     '--quiet',
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  ];
+  if (accessToken) librespotArgs.push('--access-token', accessToken);
+
+  _engine    = new DJEngine();
+  _player    = spawn(outputCfg.cmd, outputCfg.args, { stdio: ['pipe', 'ignore', 'ignore'] });
+  _librespot = spawn(librespotBin, librespotArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
   _librespot.stdout.pipe(_engine).pipe(_player.stdin);
   _librespot.stderr.on('data', d => process.stderr.write('[librespot] ' + d));
@@ -77,6 +82,13 @@ function getEngine() { return _active ? _engine : null; }
 function isActive() { return _active; }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
+
+function _readAccessToken() {
+  try {
+    const data = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
+    return data.accessToken || null;
+  } catch (_) { return null; }
+}
 
 function _findLibrespot() {
   // 1. Check our own bin/ directory (installed by setup.js)
