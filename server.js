@@ -718,8 +718,8 @@ const DJ_STYLES = {
 async function setVol(v, rampMs = 0) {
   const eng = djEngine?.getEngine?.();
   if (eng) {
-    // DSP engine volume — zero latency, per-sample precision
-    eng.setVolume(Math.max(0, Math.min(1, v / 100)), rampMs);
+    // DSP engine: v=0 means silent, v>0 means full volume (1.0). Don't scale by Spotify %.
+    eng.setVolume(v > 0 ? 1.0 : 0, rampMs);
     return;
   }
   return spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.max(0, Math.min(100, Math.round(v))) } }).catch(() => {});
