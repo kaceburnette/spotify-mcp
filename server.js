@@ -88,6 +88,7 @@ const DEFAULT_PREFS = {
   startup_mood: 'grind',
   startup_song: 'spotify:track:08mG3Y1vljYA6bvDt4Wqkj', // Back in Black — AC/DC. Override in .spotify-prefs.json
   mood_overrides: {},       // override keywords for any mood: { "grind": { "keywords": [...] } }
+  custom_moods: {},         // add entirely new moods: { "deep_house": { "energy": "medium", "keywords": [...], "triggers": [...] } }
   blacklist_artists: [],    // artist names to never queue (case-insensitive substring match)
   blacklist_tracks: [],     // track IDs to never queue
 };
@@ -132,9 +133,16 @@ const MOOD_PROFILES = {
   confident:   { energy: 'high',   keywords: ['walk like a badass confidence', 'power moves motivation energy', 'confidence boost hype music'] },
 };
 
-// Apply user overrides from prefs
+// Apply user overrides to existing moods
 for (const [mood, overrides] of Object.entries(prefs.mood_overrides || {})) {
   if (MOOD_PROFILES[mood]) Object.assign(MOOD_PROFILES[mood], overrides);
+}
+
+// Merge user-defined custom moods into MOOD_PROFILES and VIBE_KEYWORDS
+for (const [name, def] of Object.entries(prefs.custom_moods || {})) {
+  if (!def?.keywords?.length) continue;
+  MOOD_PROFILES[name] = { energy: def.energy || 'medium', keywords: def.keywords };
+  if (def.triggers?.length) VIBE_KEYWORDS[name] = def.triggers;
 }
 
 // --- Persistent State ---
@@ -440,14 +448,33 @@ server.tool('update_prefs',
     remove_blacklist_artist:z.string().optional().describe('Artist name to remove from blacklist'),
     add_blacklist_track:    z.string().optional().describe('Track ID to never queue'),
     remove_blacklist_track: z.string().optional().describe('Track ID to remove from blacklist'),
+    add_custom_mood:        z.object({
+      name:     z.string().describe('Mood name (lowercase_snake_case, e.g. "deep_house")'),
+      energy:   z.enum(['min','low','medium','high','max']),
+      keywords: z.array(z.string()).describe('2-3 Spotify playlist search terms'),
+      triggers: z.array(z.string()).optional().describe('Words/phrases that auto-activate this mood from session context'),
+    }).optional().describe('Add or replace a custom mood'),
+    remove_custom_mood:     z.string().optional().describe('Custom mood name to delete'),
   },
-  async ({ startup_mood, startup_song, add_blacklist_artist, remove_blacklist_artist, add_blacklist_track, remove_blacklist_track }) => {
+  async ({ startup_mood, startup_song, add_blacklist_artist, remove_blacklist_artist, add_blacklist_track, remove_blacklist_track, add_custom_mood, remove_custom_mood }) => {
     if (startup_mood !== undefined) prefs.startup_mood = MOOD_PROFILES[startup_mood] ? startup_mood : null;
     if (startup_song !== undefined) prefs.startup_song = startup_song || null;
     if (add_blacklist_artist)    prefs.blacklist_artists = [...new Set([...(prefs.blacklist_artists ?? []), add_blacklist_artist])];
     if (remove_blacklist_artist) prefs.blacklist_artists = (prefs.blacklist_artists ?? []).filter(a => a !== remove_blacklist_artist);
     if (add_blacklist_track)     prefs.blacklist_tracks  = [...new Set([...(prefs.blacklist_tracks  ?? []), add_blacklist_track])];
     if (remove_blacklist_track)  prefs.blacklist_tracks  = (prefs.blacklist_tracks  ?? []).filter(t => t !== remove_blacklist_track);
+    if (add_custom_mood) {
+      prefs.custom_moods = prefs.custom_moods ?? {};
+      prefs.custom_moods[add_custom_mood.name] = { energy: add_custom_mood.energy, keywords: add_custom_mood.keywords, triggers: add_custom_mood.triggers ?? [] };
+      MOOD_PROFILES[add_custom_mood.name] = { energy: add_custom_mood.energy, keywords: add_custom_mood.keywords };
+      if (add_custom_mood.triggers?.length) VIBE_KEYWORDS[add_custom_mood.name] = add_custom_mood.triggers;
+    }
+    if (remove_custom_mood) {
+      prefs.custom_moods = prefs.custom_moods ?? {};
+      delete prefs.custom_moods[remove_custom_mood];
+      delete MOOD_PROFILES[remove_custom_mood];
+      delete VIBE_KEYWORDS[remove_custom_mood];
+    }
     savePrefs();
     return { content: [{ type: 'text', text: JSON.stringify(prefs, null, 2) }] };
   }

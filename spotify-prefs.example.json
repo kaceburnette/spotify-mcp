@@ -1,20 +1,29 @@
 {
-  "_readme": "Copy this file to .spotify-prefs.json to customize your setup. All fields are optional — defaults are used for anything not specified.",
+  "_readme": "Copy this file to .spotify-prefs.json to customize your setup. All fields are optional.",
 
   "startup_mood": "grind",
 
-  "startup_song": "spotify:track:08mG3Y1vljYA6bvDt4Wqkj",
-  "_startup_song_note": "Set to null or remove this field to disable the startup song entirely.",
+  "startup_song": null,
+  "_startup_song_note": "Set to a Spotify track URI to play a specific song every time the server starts. null = disabled.",
 
   "mood_overrides": {
+    "_note": "Override keywords for any built-in mood. Useful if the defaults don't match your taste.",
     "grind": {
-      "keywords": ["dark electronic focus coding", "deep work techno instrumental", "coding electronic beats"]
+      "keywords": ["dark techno focus coding", "deep work techno instrumental"]
+    }
+  },
+
+  "custom_moods": {
+    "_note": "Add entirely new moods. 'keywords' are Spotify playlist search terms. 'triggers' are words Claude looks for in your session context to auto-activate this mood.",
+    "deep_house": {
+      "energy": "medium",
+      "keywords": ["deep house focus work", "minimal tech house instrumental"],
+      "triggers": ["deep house", "house vibes", "tech house"]
     },
-    "focus": {
-      "keywords": ["deep focus study concentration", "lo-fi study beats", "ambient focus instrumental"]
-    },
-    "hype": {
-      "keywords": ["hip hop hype energy 2024", "trap bangers rap", "high energy rap playlist"]
+    "lofi_rap": {
+      "energy": "medium",
+      "keywords": ["lofi hip hop rap beats", "chill trap instrumental lo-fi"],
+      "triggers": ["lofi rap", "chill rap beats"]
     }
   },
 

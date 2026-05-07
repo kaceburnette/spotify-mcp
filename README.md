@@ -94,11 +94,18 @@ cp spotify-prefs.example.json .spotify-prefs.json
 
 ```json
 {
-  "startup_song": "spotify:track:08mG3Y1vljYA6bvDt4Wqkj",
+  "startup_song": null,
   "startup_mood": "grind",
   "mood_overrides": {
     "grind": {
       "keywords": ["dark techno focus", "coding beats instrumental"]
+    }
+  },
+  "custom_moods": {
+    "deep_house": {
+      "energy": "medium",
+      "keywords": ["deep house focus work", "minimal tech house instrumental"],
+      "triggers": ["deep house", "house vibes"]
     }
   },
   "blacklist_artists": ["Artist Name Here"],
@@ -110,11 +117,18 @@ cp spotify-prefs.example.json .spotify-prefs.json
 |---|---|---|
 | `startup_song` | Track URI played every time the server starts. Set to `null` to disable. | `null` |
 | `startup_mood` | Mood applied on boot | `grind` |
-| `mood_overrides` | Custom playlist search keywords per mood | See example file |
+| `mood_overrides` | Override playlist search keywords for any built-in mood | `{}` |
+| `custom_moods` | Add entirely new moods with custom keywords and auto-detection triggers | `{}` |
 | `blacklist_artists` | These artists never get queued (substring match) | `[]` |
 | `blacklist_tracks` | These track IDs never get queued | `[]` |
 
 Changes take effect on next MCP reconnect.
+
+You can also manage everything by talking to Claude:
+- *"add a custom mood called lo-fi rap with chill trap beats"*
+- *"blacklist [artist name]"*
+- *"set my startup mood to focus"*
+- *"turn off the startup song"*
 
 You can also update config by telling Claude:
 - *"blacklist [artist name]"*
