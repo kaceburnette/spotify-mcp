@@ -273,17 +273,22 @@ async function ensureQueueDepth() {
 // this maps it to a mood using keyword frequency + time-of-day signals.
 
 const VIBE_KEYWORDS = {
-  lock_in:     ['debug', 'bug', 'prod', 'urgent', 'deadline', 'incident', 'down', 'broken', 'hotfix', 'outage'],
-  grind:       ['code', 'coding', 'build', 'implement', 'feature', 'commit', 'refactor', 'sprint', 'pr', 'push', 'ship', 'shipping'],
-  focus:       ['focus', 'deep focus', 'deep work', 'concentration', 'concentrate', 'zero distraction', 'instrumental', 'no lyrics', 'study', 'review', 'read', 'document', 'write', 'plan', 'think', 'research', 'draft', 'locked in'],
-  hype:        ['shipped', 'merged', 'launched', 'released', 'done', 'finished', 'deployed', 'just pushed', 'celebrate'],
-  confident:   ['meeting', 'demo', 'pitch', 'presentation', 'client', 'sales', 'investor', 'ceo', 'boss'],
-  creative:    ['design', 'brainstorm', 'idea', 'concept', 'wireframe', 'figma', 'sketch', 'creative'],
-  chill:       ['slow', 'easy', 'casual', 'friday', 'weekend', 'break', 'lunch', 'coffee'],
-  night_drive: ['night', 'late', 'midnight', 'dark', '11pm', '12am', '1am', '2am', '3am'],
-  wind_down:   ['tired', 'exhausted', 'wrapping up', 'calling it', 'done for the day', 'winding down'],
-  background:  ['call', 'zoom', 'meeting', 'talking', 'phone', 'on a call'],
-  workout:     ['gym', 'workout', 'run', 'lift', 'training', 'exercise'],
+  lock_in:     ['debug', 'bug', 'prod', 'urgent', 'deadline', 'incident', 'down', 'broken', 'hotfix', 'outage', 'on fire', 'critical', 'crash', 'error', 'fix', 'firefight'],
+  grind:       ['implement', 'feature', 'commit', 'refactor', 'sprint', 'pr', 'push', 'ship', 'shipping', 'build out', 'working on', 'building'],
+  focus:       ['focus', 'deep focus', 'deep work', 'concentration', 'concentrate', 'zero distraction', 'no lyrics', 'study', 'review', 'read', 'document', 'write', 'plan', 'think', 'research', 'draft', 'locked in', 'heads down'],
+  hype:        ['shipped', 'merged', 'launched', 'released', 'done', 'finished', 'deployed', 'just pushed', 'celebrate', 'killed it', 'nailed it', 'closed', 'won'],
+  confident:   ['demo', 'pitch', 'presentation', 'client', 'sales', 'investor', 'ceo', 'boss', 'interview', 'call with'],
+  creative:    ['design', 'brainstorm', 'idea', 'concept', 'wireframe', 'figma', 'sketch', 'creative', 'exploring', 'thinking through', 'planning'],
+  chill:       ['slow', 'easy', 'casual', 'friday', 'weekend', 'break', 'lunch', 'coffee', 'low stakes', 'light', 'no rush'],
+  night_drive: ['night', 'late', 'midnight', '11pm', '12am', '1am', '2am', '3am', '4am', 'late night', 'after midnight'],
+  wind_down:   ['tired', 'exhausted', 'wrapping up', 'calling it', 'done for the day', 'winding down', 'end of day', 'signing off', 'last thing'],
+  background:  ['call', 'zoom', 'meeting', 'talking', 'phone', 'on a call', 'standup', 'sync'],
+  workout:     ['gym', 'workout', 'run', 'lift', 'training', 'exercise', 'sets', 'reps', 'running'],
+  pump_up:     ['pump up', 'hyped', 'pumped', 'fired up', 'let\'s go', 'energy', 'get going', 'motivate'],
+  relax:       ['relax', 'chill out', 'decompress', 'unwind', 'take it easy', 'slow down', 'recover', 'rest'],
+  sad:         ['sad', 'down', 'rough day', 'rough one', 'didn\'t go well', 'stressed', 'not feeling it', 'low'],
+  in_my_feels: ['in my feels', 'emotional', 'reflecting', 'thinking about', 'missing', 'nostalgic', 'overthinking'],
+  angry:       ['angry', 'pissed', 'frustrated', 'annoyed', 'over it', 'done with', 'rage', 'mad'],
 };
 
 // Explicit mood name mentions get a big score boost — "I want focus vibes" → focus wins
@@ -302,7 +307,7 @@ const EXPLICIT_MOOD_TRIGGERS = {
 function detectMood(context) {
   const ctx  = context.toLowerCase();
   const hour = new Date().getHours();
-  const scores = Object.fromEntries(Object.keys(VIBE_KEYWORDS).map(m => [m, 0]));
+  const scores = Object.fromEntries(Object.keys(MOOD_PROFILES).map(m => [m, 0]));
 
   for (const [mood, kws] of Object.entries(VIBE_KEYWORDS)) {
     scores[mood] = kws.filter(kw => ctx.includes(kw)).length;
