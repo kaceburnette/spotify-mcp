@@ -107,7 +107,7 @@ cp spotify-prefs.example.json .spotify-prefs.json
 
 | Field | What it does | Default |
 |---|---|---|
-| `startup_song` | Track URI played every time the server starts | Back in Black — AC/DC |
+| `startup_song` | Track URI played every time the server starts. Set to `null` or remove to disable. | Back in Black — AC/DC |
 | `startup_mood` | Mood applied on boot | `grind` |
 | `mood_overrides` | Custom playlist search keywords per mood | See example file |
 | `blacklist_artists` | These artists never get queued (substring match) | `[]` |
@@ -119,6 +119,8 @@ You can also update config by telling Claude:
 - *"blacklist [artist name]"*
 - *"set my startup mood to focus"*
 - *"change my startup song to [song]"*
+- *"turn off the startup song"*
+- *"disable the startup song"*
 
 ---
 

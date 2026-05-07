@@ -4,6 +4,7 @@
   "startup_mood": "grind",
 
   "startup_song": "spotify:track:08mG3Y1vljYA6bvDt4Wqkj",
+  "_startup_song_note": "Set to null or remove this field to disable the startup song entirely.",
 
   "mood_overrides": {
     "grind": {

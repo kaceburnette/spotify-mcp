@@ -429,7 +429,7 @@ server.tool('update_prefs',
   'Update user preferences. Saves to .spotify-prefs.json so they persist and can be shared.',
   {
     startup_mood:           z.string().optional().describe('Mood to apply when server starts (mood name or empty string to clear)'),
-    startup_song:           z.string().optional().describe('Spotify track URI to play at startup'),
+    startup_song:           z.string().optional().describe('Spotify track URI to play at startup. Pass empty string "" to disable the startup song entirely.'),
     add_blacklist_artist:   z.string().optional().describe('Artist name to never queue'),
     remove_blacklist_artist:z.string().optional().describe('Artist name to remove from blacklist'),
     add_blacklist_track:    z.string().optional().describe('Track ID to never queue'),
