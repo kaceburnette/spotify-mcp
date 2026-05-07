@@ -734,15 +734,21 @@ server.tool('dj_set',
     const usedUris  = new Set();
     let   firstDone = false;
 
-    const pullTracksFromPlaylist = async (query, needed) => {
-      const sr = await spotifyFetch('/search', { query: { q: query, type: 'playlist', limit: 8 } });
+    const pullTracksFromPlaylist = async (query) => {
+      const sr = await spotifyFetch('/search', { query: { q: query, type: 'playlist', limit: 10 } });
       const pls = (sr?.playlists?.items ?? []).filter(p => p?.id);
       if (!pls.length) return [];
-      const pl     = pls[Math.floor(Math.random() * Math.min(pls.length, 4))];
-      const total  = pl.tracks?.total ?? 50;
-      const offset = Math.floor(Math.random() * Math.max(1, total - 30));
-      const pr     = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 40, offset } });
-      return (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && !isBlacklisted(t) && !usedUris.has(t.id));
+      // Some playlists return 403 — iterate all results until one works
+      for (const pl of pls) {
+        try {
+          const total  = pl.tracks?.total ?? 50;
+          const offset = Math.floor(Math.random() * Math.max(1, total - 30));
+          const pr     = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 40, offset } });
+          const tracks = (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !usedUris.has(t.id));
+          if (tracks.length > 0) return tracks;
+        } catch (_) {}
+      }
+      return [];
     };
 
     for (const phase of phases) {
@@ -751,13 +757,13 @@ server.tool('dj_set',
 
       // Mix: playlist discovery + personal taste seeded with top artist names
       await Promise.allSettled(phase.queries.map(async q => {
-        try { pool.push(...await pullTracksFromPlaylist(q, needed * 2)); } catch (_) {}
+        try { pool.push(...await pullTracksFromPlaylist(q)); } catch (_) {}
       }));
 
       // Sprinkle in top artist tracks if we have them (makes the set personal)
       if (topArtistNames.length) {
         const artistSeed = topArtistNames[Math.floor(Math.random() * topArtistNames.length)];
-        try { pool.push(...await pullTracksFromPlaylist(`${artistSeed} ${genre}`, needed)); } catch (_) {}
+        try { pool.push(...await pullTracksFromPlaylist(`${artistSeed} ${genre}`)); } catch (_) {}
       }
 
       shuffle(pool);
