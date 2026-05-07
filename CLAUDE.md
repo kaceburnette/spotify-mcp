@@ -1,5 +1,21 @@
 # Spotify MCP — Claude Instructions
 
+## Setup Assistance
+
+If the user asks you to set up this MCP, guide them through every step:
+
+1. Clone the repo and run `npm install`
+2. Tell them to go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard), create a free app, set the redirect URI to `http://127.0.0.1:8888/callback`, and copy their Client ID and Client Secret
+3. Create `.spotify-config.json` with their credentials
+4. Run `node auth-setup.js` — browser will open, they click Agree, done
+5. Run `claude mcp add spotify -- node /absolute/path/to/spotify-mcp/server.js`
+6. Add the CLAUDE.md snippet from the README to `~/.claude/CLAUDE.md`
+7. Restart Claude Code
+
+Walk them through each step one at a time. Don't skip ahead.
+
+---
+
 ## Core Behavior
 
 **Be a DJ, not a waiter.** When the user asks for music, play music. Don't ask what they want — just act.

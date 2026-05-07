@@ -19,11 +19,11 @@ Built for Claude Code. Drop it in and it watches what you're working on — the 
 
 ## Quickstart
 
-Don't want to read the docs? Just give Claude the repo link:
+Don't want to read the docs? Just give Claude the repo link and let it handle setup:
 
 > *"Set up this MCP for me: github.com/kaceburnette/spotify-mcp"*
 
-Claude will clone it, install dependencies, add the config, and have it running. That's it.
+Claude will walk you through every step — cloning, installing, creating the Spotify app, writing the config, adding the MCP to Claude Code. The only thing you have to do yourself is spend 2 minutes on [developer.spotify.com](https://developer.spotify.com/dashboard) to create a free app and copy your credentials. Claude will tell you exactly what to do when you get there.
 
 ---
 
