@@ -715,7 +715,13 @@ const DJ_STYLES = {
   },
 };
 
-async function setVol(v) {
+async function setVol(v, rampMs = 0) {
+  const eng = djEngine?.getEngine?.();
+  if (eng) {
+    // DSP engine volume — zero latency, per-sample precision
+    eng.setVolume(Math.max(0, Math.min(1, v / 100)), rampMs);
+    return;
+  }
   return spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.max(0, Math.min(100, Math.round(v))) } }).catch(() => {});
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -735,62 +741,70 @@ async function performTransition(style, vol, nextUri = null, introSkipMs = 30000
     }
   };
 
+  const eng = djEngine?.getEngine?.();
+
   switch (style) {
 
     case 'cut': {
-      await setVol(0);
+      await setVol(0, 0);
       await playAndSeek();
-      await sleep(250);
-      await setVol(vol);
+      await sleep(200);
+      await setVol(vol, 150);
       break;
     }
 
     case 'stutter': {
-      for (let i = 0; i < 4; i++) {
-        await setVol(0); await sleep(80);
-        await setVol(vol); await sleep(80);
+      if (eng) {
+        await eng.stutter(4, 70);
+      } else {
+        for (let i = 0; i < 4; i++) { await setVol(0); await sleep(70); await setVol(vol); await sleep(70); }
       }
-      await setVol(0);
+      await setVol(0, 0);
       await playAndSeek();
-      await sleep(400);
-      for (let i = 1; i <= 8; i++) { await setVol(vol * i / 8); await sleep(120); }
+      await sleep(200);
+      await setVol(vol, 400);
       break;
     }
 
     case 'echo': {
-      const echoes = [0.9, 0.5, 0.85, 0.4, 0.7, 0.25, 0.5, 0.1, 0];
-      for (const level of echoes) { await setVol(vol * level); await sleep(150); }
+      if (eng) eng.enableEcho(300, 0.65);
+      await setVol(0, 1000);
+      await sleep(1100);
       await playAndSeek();
-      await sleep(500);
-      for (let i = 1; i <= 10; i++) { await setVol(vol * i / 10); await sleep(100); }
+      await sleep(200);
+      await setVol(vol, 700);
+      await sleep(800);
+      if (eng) eng.disableEcho();
       break;
     }
 
     case 'swell': {
-      for (let i = 0; i <= 5; i++) { await setVol(Math.min(100, vol + (20 * i / 5))); await sleep(150); }
-      await sleep(200);
-      await setVol(0);
+      if (eng) eng.setVolume(Math.min(1.3, (vol / 100) * 1.3), 500);
+      else await setVol(Math.min(100, vol * 1.3));
+      await sleep(600);
+      await setVol(0, 0);
       await playAndSeek();
-      await sleep(400);
-      for (let i = 1; i <= 8; i++) { await setVol(vol * i / 8); await sleep(150); }
+      await sleep(200);
+      await setVol(vol, 700);
       break;
     }
 
     case 'spinback': {
-      // Rapid volume spiral down (simulates record spinning back), snap to next, slam back in
-      for (let i = 10; i >= 0; i--) { await setVol(vol * i / 10); await sleep(60); }
+      await setVol(0, 500);
+      await sleep(550);
       await playAndSeek();
-      await sleep(200);
-      await setVol(vol);
+      await sleep(150);
+      await setVol(vol, 200);
       break;
     }
 
     case 'fade':
     default: {
-      for (let i = 9; i >= 0; i--) { await setVol(vol * i / 10); await sleep(300); }
+      await setVol(0, 1400);
+      await sleep(1500);
       await playAndSeek();
-      await sleep(600);
-      for (let i = 1; i <= 10; i++) { await setVol(vol * i / 10); await sleep(300); }
+      await sleep(200);
+      await setVol(vol, 1000);
       break;
     }
   }
