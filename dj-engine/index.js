@@ -2,7 +2,7 @@
 
 // ── DJ Engine — Entry point ───────────────────────────────────────────────────
 // Spawns librespot with --backend pipe, pipes PCM through DJEngine DSP,
-// outputs to system speakers via platform-native command.
+// outputs to system speakers via the `speaker` npm package (CoreAudio/ALSA).
 //
 // librespot announces itself as a Spotify Connect device. Select it once in the
 // Spotify app (or Claude calls transfer_playback automatically) and all audio
@@ -17,16 +17,9 @@ const BIN_DIR      = path.join(__dirname, 'bin');
 const TOKENS_FILE  = path.join(__dirname, '..', '.spotify-tokens.json');
 const DEVICE_NAME  = 'spotify-mcp DJ';
 
-// Platform → output command that reads raw S16LE stereo 44100Hz from stdin
-const OUTPUT_CMD = {
-  darwin:  { cmd: 'afplay', args: ['-t', 'raw', '-f', 'LEI16@44100', '-c', '2', '-'] },
-  linux:   { cmd: 'aplay',  args: ['-r', '44100', '-c', '2', '-f', 'S16_LE', '-t', 'raw'] },
-  // win32: SoX `play` works if installed — documented in README
-};
-
 // Module-level singletons
 let _librespot = null;
-let _player    = null;
+let _speaker   = null;
 let _engine    = null;
 let _active    = false;
 
@@ -38,9 +31,11 @@ let _active    = false;
 async function start(deviceName = DEVICE_NAME) {
   if (_active) await stop();
 
-  const outputCfg = OUTPUT_CMD[process.platform];
-  if (!outputCfg) throw new Error(`Platform "${process.platform}" not yet supported. Supported: macOS, Linux.`);
+  if (process.platform === 'win32') {
+    throw new Error('Windows not yet supported.');
+  }
 
+  const Speaker      = require('speaker');
   const librespotBin = _findLibrespot();
   const accessToken  = _readAccessToken();
 
@@ -54,12 +49,12 @@ async function start(deviceName = DEVICE_NAME) {
   if (accessToken) librespotArgs.push('--access-token', accessToken);
 
   _engine    = new DJEngine();
-  _player    = spawn(outputCfg.cmd, outputCfg.args, { stdio: ['pipe', 'ignore', 'ignore'] });
+  _speaker   = new Speaker({ channels: 2, bitDepth: 16, sampleRate: 44100, signed: true });
   _librespot = spawn(librespotBin, librespotArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-  _librespot.stdout.pipe(_engine).pipe(_player.stdin);
+  _librespot.stdout.pipe(_engine).pipe(_speaker);
   _librespot.stderr.on('data', d => process.stderr.write('[librespot] ' + d));
-  _librespot.on('exit', code => { if (_active) _active = false; });
+  _librespot.on('exit', () => { if (_active) _active = false; });
 
   _active = true;
   return _engine;
@@ -69,9 +64,9 @@ async function start(deviceName = DEVICE_NAME) {
 async function stop() {
   _active = false;
   _librespot?.kill();
-  _player?.kill();
+  _speaker?.end();
   _librespot = null;
-  _player    = null;
+  _speaker   = null;
   _engine    = null;
 }
 
