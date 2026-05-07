@@ -604,6 +604,132 @@ server.tool('get_album', 'Get album details and track list.', { album_id: z.stri
   return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, artist: data.artists?.map(a => a.name).join(', '), release_date: data.release_date, total_tracks: data.total_tracks, uri: data.uri, url: data.external_urls?.spotify, tracks: (data.tracks?.items ?? []).map(t => ({ name: t.name, track_number: t.track_number, duration: fmtMs(t.duration_ms), uri: t.uri })) }, null, 2) }] };
 });
 
+// ── DJ Tools ─────────────────────────────────────────────────────────────────
+
+server.tool('dj_transition',
+  'DJ-style transition to the next track. Fades volume out, skips, fades back in. Use this instead of next_track when you want a smooth mix.',
+  {
+    fade_seconds: z.number().min(1).max(8).default(3).describe('Seconds for each fade (out + in)'),
+  },
+  async ({ fade_seconds }) => {
+    const current = await spotifyFetch('/me/player');
+    const vol     = current?.device?.volume_percent ?? 80;
+    const steps   = 10;
+    const delay   = (fade_seconds * 1000) / steps;
+
+    // Fade out
+    for (let i = steps - 1; i >= 0; i--) {
+      await spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.round(vol * i / steps) } });
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    // Skip
+    await spotifyFetch('/me/player/next', { method: 'POST' });
+    await new Promise(r => setTimeout(r, 600));
+
+    // Fade in
+    for (let i = 1; i <= steps; i++) {
+      await spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.round(vol * i / steps) } });
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    const result = await spotifyFetch('/me/player');
+    if (result?.item) updateSeeds([result.item]);
+    return { content: [{ type: 'text', text: JSON.stringify({ transition: 'complete', now_playing: result?.item ? { name: result.item.name, artist: result.item.artists?.map(a => a.name).join(', ') } : null }, null, 2) }] };
+  }
+);
+
+server.tool('cut_early',
+  'Cut the current track now and DJ-transition to the next one. What a real DJ does — no waiting for the song to end.',
+  {
+    fade_seconds: z.number().min(1).max(5).default(2).describe('Seconds for the fade'),
+  },
+  async ({ fade_seconds }) => {
+    const current = await spotifyFetch('/me/player');
+    const vol     = current?.device?.volume_percent ?? 80;
+    const steps   = 8;
+    const delay   = (fade_seconds * 1000) / steps;
+
+    // Hard seek to near the end so it feels like a cut, then fade
+    const duration = current?.item?.duration_ms;
+    if (duration) {
+      await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: Math.max(0, duration - 3000) } });
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Fade out fast
+    for (let i = steps - 1; i >= 0; i--) {
+      await spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.round(vol * i / steps) } });
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    await spotifyFetch('/me/player/next', { method: 'POST' });
+    await new Promise(r => setTimeout(r, 600));
+
+    // Fade in
+    for (let i = 1; i <= steps; i++) {
+      await spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: Math.round(vol * i / steps) } });
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    const result = await spotifyFetch('/me/player');
+    if (result?.item) updateSeeds([result.item]);
+    return { content: [{ type: 'text', text: JSON.stringify({ cut: 'done', now_playing: result?.item ? { name: result.item.name, artist: result.item.artists?.map(a => a.name).join(', ') } : null }, null, 2) }] };
+  }
+);
+
+server.tool('dj_set',
+  'Build and queue a proper DJ set with progression — warm up → build → peak. Searches for tracks matching each phase and queues them in order. Claude should call this when the user wants a full set for a genre or vibe.',
+  {
+    genre:    z.string().describe('Genre or vibe (e.g. "techno", "house", "hip hop", "trance")'),
+    tracks:   z.number().min(4).max(20).default(8).describe('Total tracks in the set'),
+  },
+  async ({ genre, tracks }) => {
+    const phases = [
+      { label: 'warm up',  query: `${genre} warm up opening deep`,        count: Math.ceil(tracks * 0.25) },
+      { label: 'build',    query: `${genre} building energy progressive`,   count: Math.ceil(tracks * 0.35) },
+      { label: 'peak',     query: `${genre} peak hour intense hard`,        count: Math.floor(tracks * 0.40) },
+    ];
+
+    const setList = [];
+    let firstPlaylistUri = null;
+
+    for (const phase of phases) {
+      try {
+        const sr       = await spotifyFetch('/search', { query: { q: phase.query, type: 'playlist', limit: 8 } });
+        const playlists = (sr?.playlists?.items ?? []).filter(p => p?.id);
+        if (!playlists.length) continue;
+
+        const pl     = playlists[Math.floor(Math.random() * Math.min(playlists.length, 4))];
+        const total  = pl.tracks?.total ?? 50;
+        const offset = Math.floor(Math.random() * Math.max(1, total - 20));
+        const pr     = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 30, offset } });
+        const tracks_pool = (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && !isBlacklisted(t));
+
+        shuffle(tracks_pool);
+        const picked = tracks_pool.slice(0, phase.count);
+
+        if (!firstPlaylistUri && picked.length) {
+          firstPlaylistUri = picked[0].uri;
+          await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [picked[0].uri] } });
+          await new Promise(r => setTimeout(r, 800));
+          await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: false } });
+          picked.shift();
+        }
+
+        for (const t of picked) {
+          try {
+            await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: t.uri } });
+            setList.push({ phase: phase.label, name: t.name, artist: t.artists?.map(a => a.name).join(', ') });
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    return { content: [{ type: 'text', text: JSON.stringify({ set_built: true, genre, total_tracks: setList.length + 1, set: setList }, null, 2) }] };
+  }
+);
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 async function main() {
