@@ -86,7 +86,7 @@ async function spotifyFetch(endpoint, { method = 'GET', body, query } = {}) {
 
 const DEFAULT_PREFS = {
   startup_mood: 'grind',
-  startup_song: 'spotify:track:08mG3Y1vljYA6bvDt4Wqkj', // Back in Black — AC/DC. Override in .spotify-prefs.json
+  startup_song: null,
   mood_overrides: {},       // override keywords for any mood: { "grind": { "keywords": [...] } }
   custom_moods: {},         // add entirely new moods: { "deep_house": { "energy": "medium", "keywords": [...], "triggers": [...] } }
   blacklist_artists: [],    // artist names to never queue (case-insensitive substring match)
