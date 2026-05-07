@@ -3,3 +3,4 @@ node_modules/
 .spotify-tokens.json
 .spotify-state.json
 .spotify-prefs.json
+dj-engine/bin/

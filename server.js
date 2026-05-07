@@ -6,6 +6,10 @@ const { z } = require('zod');
 const fs = require('fs');
 const path = require('path');
 
+// DJ engine — optional. Loads only if dj-engine/index.js exists.
+let djEngine = null;
+try { djEngine = require('./dj-engine/index'); } catch (_) {}
+
 const TOKEN_PATH  = path.join(__dirname, '.spotify-tokens.json');
 const CONFIG_PATH = path.join(__dirname, '.spotify-config.json');
 const STATE_PATH  = path.join(__dirname, '.spotify-state.json');
@@ -1020,6 +1024,121 @@ server.tool('stop_dj', 'Stop the live DJ engine. Playback continues but auto-tra
   stopLiveDJ();
   return { content: [{ type: 'text', text: JSON.stringify({ live_dj: false, message: 'Live DJ engine stopped. Music keeps playing.' }) }] };
 });
+
+// ── DJ Engine Tools (real DSP — requires dj-engine setup) ────────────────────
+// These tools are only registered if dj-engine/index.js is present.
+// Run `node dj-engine/setup.js` once to install librespot and unlock them.
+
+if (djEngine) {
+
+  server.tool('engine_start',
+    'Start the real DJ audio engine (librespot + DSP). Announces as "spotify-mcp DJ" in Spotify — select it as your playback device once, then all audio flows through the engine. Enables real crossfade, filter sweeps, echo, and stutter.',
+    { device_name: z.string().default('spotify-mcp DJ').describe('Name shown in Spotify device list') },
+    async ({ device_name }) => {
+      await djEngine.start(device_name);
+      // Auto-transfer Spotify playback to the engine device
+      await new Promise(r => setTimeout(r, 1500)); // let librespot announce
+      try {
+        const devices = await spotifyFetch('/me/player/devices');
+        const eng = (devices?.devices ?? []).find(d => d.name === device_name);
+        if (eng) await spotifyFetch('/me/player', { method: 'PUT', body: { device_ids: [eng.id], play: true } });
+      } catch (_) {}
+      return { content: [{ type: 'text', text: JSON.stringify({ engine: 'started', device: device_name, message: 'Select "' + device_name + '" in Spotify if playback didn\'t switch automatically.' }) }] };
+    }
+  );
+
+  server.tool('engine_stop',
+    'Stop the DJ audio engine. Spotify reverts to normal playback.',
+    {},
+    async () => {
+      await djEngine.stop();
+      return { content: [{ type: 'text', text: JSON.stringify({ engine: 'stopped' }) }] };
+    }
+  );
+
+  server.tool('engine_filter',
+    'Apply or sweep a real-time biquad filter on the audio stream. lowpass sweeps down (builds energy before a drop). highpass strips bass (classic DJ filter open). sweep=true animates the frequency over durationMs.',
+    {
+      type:       z.enum(['lowpass', 'highpass']).describe('Filter type'),
+      freq:       z.number().min(20).max(20000).describe('Target frequency in Hz. 200=very filtered, 2000=mid, 8000=open'),
+      sweep:      z.boolean().default(false).describe('Animate from current frequency to target over durationMs'),
+      start_freq: z.number().min(20).max(20000).optional().describe('Starting frequency for sweep'),
+      duration_ms:z.number().min(100).max(30000).default(4000).describe('Sweep duration in ms'),
+    },
+    async ({ type, freq, sweep, start_freq, duration_ms }) => {
+      const eng = djEngine.getEngine();
+      if (!eng) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Engine not running. Call engine_start first.' }) }] };
+      if (sweep) {
+        eng.sweepFilter(type, start_freq ?? (type === 'lowpass' ? 8000 : 200), freq, duration_ms);
+        return { content: [{ type: 'text', text: JSON.stringify({ filter: 'sweeping', type, from: start_freq, to: freq, duration_ms }) }] };
+      }
+      eng.enableFilter(type, freq);
+      return { content: [{ type: 'text', text: JSON.stringify({ filter: 'on', type, freq }) }] };
+    }
+  );
+
+  server.tool('engine_filter_off',
+    'Disable the filter. Audio returns to flat response.',
+    {},
+    async () => {
+      djEngine.getEngine()?.disableFilter();
+      return { content: [{ type: 'text', text: JSON.stringify({ filter: 'off' }) }] };
+    }
+  );
+
+  server.tool('engine_echo',
+    'Add a real delay/echo effect to the audio stream.',
+    {
+      delay_ms: z.number().min(50).max(2000).default(300).describe('Echo delay in milliseconds'),
+      feedback: z.number().min(0).max(0.85).default(0.4).describe('Feedback amount 0-0.85. Higher = more repeats'),
+    },
+    async ({ delay_ms, feedback }) => {
+      const eng = djEngine.getEngine();
+      if (!eng) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Engine not running.' }) }] };
+      eng.enableEcho(delay_ms, feedback);
+      return { content: [{ type: 'text', text: JSON.stringify({ echo: 'on', delay_ms, feedback }) }] };
+    }
+  );
+
+  server.tool('engine_echo_off',
+    'Remove the echo effect.',
+    {},
+    async () => {
+      djEngine.getEngine()?.disableEcho();
+      return { content: [{ type: 'text', text: JSON.stringify({ echo: 'off' }) }] };
+    }
+  );
+
+  server.tool('engine_volume',
+    'Ramp the engine volume to a target level over ramp_ms milliseconds. Use for real fade in/out effects.',
+    {
+      volume:  z.number().min(0).max(1).describe('Target volume 0.0–1.0'),
+      ramp_ms: z.number().min(0).max(10000).default(0).describe('Ramp time in ms. 0 = instant'),
+    },
+    async ({ volume, ramp_ms }) => {
+      const eng = djEngine.getEngine();
+      if (!eng) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Engine not running.' }) }] };
+      eng.setVolume(volume, ramp_ms);
+      return { content: [{ type: 'text', text: JSON.stringify({ volume, ramp_ms }) }] };
+    }
+  );
+
+  server.tool('engine_status',
+    'Check if the DJ engine is running and what effects are active.',
+    {},
+    async () => {
+      const eng = djEngine.getEngine();
+      if (!eng) return { content: [{ type: 'text', text: JSON.stringify({ engine: 'stopped', message: 'Run engine_start to activate.' }) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({
+        engine:  'running',
+        volume:  eng.volume,
+        filter:  eng.filterOn  ? { type: eng.filterType, freq: Math.round(eng.filterFreq) } : 'off',
+        echo:    eng.echoOn    ? { delay_ms: eng.echoDelayMs, feedback: eng.echoFeedback } : 'off',
+      }) }] };
+    }
+  );
+
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
