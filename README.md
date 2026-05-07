@@ -2,8 +2,6 @@
 
 Spotify MCP server for Claude Code. Detects your vibe from session context, keeps a mood-matched queue running, and controls everything through natural language.
 
-Every Claude Code session starts with **Back in Black**. You can change it.
-
 ---
 
 ## What it does
@@ -11,7 +9,7 @@ Every Claude Code session starts with **Back in Black**. You can change it.
 - **Vibe detection** — Claude reads what you're working on and auto-picks the right music. Say "deep focus coding vibes" or "I just shipped" and it switches playlists immediately.
 - **Persistent mood** — mood and session state survive server restarts. Your grind session doesn't reset because you closed a tab.
 - **Smart queue** — never runs out. Pulls from your top tracks, artist catalogs, and mood-matched playlists. Same song never plays twice in a session.
-- **Fully configurable** — startup song, startup mood, per-mood playlist keywords, artist/track blacklist. All in `.spotify-prefs.json`.
+- **Fully configurable** — startup mood, per-mood playlist keywords, artist/track blacklist. All in `.spotify-prefs.json`.
 - **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024. Uses top tracks, artist catalogs, and playlist search only.
 
 ---
@@ -79,7 +77,7 @@ Or add manually to `~/.claude/settings.json`:
 }
 ```
 
-Restart Claude Code. Back in Black plays. You're in.
+Restart Claude Code.
 
 ---
 
@@ -107,7 +105,7 @@ cp spotify-prefs.example.json .spotify-prefs.json
 
 | Field | What it does | Default |
 |---|---|---|
-| `startup_song` | Track URI played every time the server starts. Set to `null` or remove to disable. | Back in Black — AC/DC |
+| `startup_song` | Track URI played every time the server starts. Set to `null` to disable. | `null` |
 | `startup_mood` | Mood applied on boot | `grind` |
 | `mood_overrides` | Custom playlist search keywords per mood | See example file |
 | `blacklist_artists` | These artists never get queued (substring match) | `[]` |
@@ -178,114 +176,7 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 
 ---
 
-## DJ Mode
-
-DJ Mode is a separate, opt-in feature. Normal vibe detection and playback are completely unaffected unless you explicitly ask for a DJ set.
-
-**Just say:**
-- *"start a DJ set"*
-- *"give me a Fisher set, live"*
-- *"run a James Hype style set"*
-- *"stop DJ"*
-
-That's it. Claude builds the set, fires the transitions, and keeps it going. No configuration needed.
-
-### How it works
-
-Claude builds a warm up → build → peak arc, pulls tracks matching each phase's energy, and fires transitions between them automatically. The live engine polls Spotify every 3 seconds — when a track is approaching its cut point (randomized per track, 15–90 seconds before the end), it fires a transition and starts the next track.
-
-### DJ Styles
-
-Each style models a real headliner's approach — track selection, transition character, energy arc.
-
-| Style | Character | Transitions |
-|---|---|---|
-| `fisher` | Tech house. Filthy basslines, Losing It energy, peak hour aggression | Hard cuts, spinbacks, stutter |
-| `garrix` | Big room EDM. Festival anthems, euphoric drops, 80,000 people | Massive swells before every drop |
-| `james_hype` | UK tech house. Hip hop blends, vocal cuts, Ferrari energy | Quick cuts, echo chops |
-| `afterlife` | Melodic techno. Anyma / Tale Of Us, Ibiza at sunset, cinematic | Smooth fades, swells, echo |
-| `carl_cox` | Classic techno. Underground, relentless, three-deck precision | Surgical hard cuts, no sentimentality |
-| `solomun` | Deep melodic house. Hypnotic grooves, Pacha Ibiza, slow burns | Long blends, never rushes |
-| `charlotte` | Dark minimal techno. Industrial, brutal, Doppler is the weapon | Hard cuts, spinbacks, stutter |
-
-### Transition styles
-
-| Style | What it sounds like |
-|---|---|
-| `fade` | Smooth 3s fade out → skip → 3s fade in |
-| `cut` | Hard drop to 0, instant skip, snap back |
-| `stutter` | Fader chop × 4, hard cut, ramp in |
-| `echo` | Reverb cascade (9 steps), skip, fade in |
-| `swell` | Volume surges past peak, hard drop, skip, ramp in |
-| `spinback` | Rapid spiral down (600ms), snap to next, full volume |
-
-### Live engine
-
-`live=true` runs the autonomous DJ engine — no pre-queueing, Claude drives every transition in real time. The engine stays running until you say *"stop DJ"*.
-
-The engine also auto-refills the track pool when it runs low, so the set never stops.
-
----
-
-## DJ Audio Engine
-
-The audio engine routes Spotify's raw PCM stream through real DSP — biquad filters, echo delay lines, volume ramps. It's what makes cuts, sweeps, and effects actually sound like a DJ and not just a skip button.
-
-This is opt-in and separate from everything else. The core MCP (vibe detection, mood engine, playback control) works without it.
-
-### Install
-
-```bash
-# macOS
-brew install librespot
-
-# Linux
-sudo apt install librespot
-
-# Or let the setup script handle it
-node dj-engine/setup.js
-```
-
-### Start the engine
-
-Tell Claude: *"start engine"* — or in any Claude Code session just say it naturally.
-
-Claude spawns librespot as a Spotify Connect device called **spotify-mcp DJ**, waits for it to register, then transfers your playback to it automatically. From that point on all audio flows through the engine.
-
-### What you can do
-
-| Say this | What happens |
-|---|---|
-| *"sweep the filter down"* | Lowpass sweep from 20kHz → 200Hz over 3 seconds |
-| *"add echo"* | Delay line kicks in (300ms, 40% feedback) |
-| *"stutter it"* | Rapid volume chops × 4 |
-| *"do a Fisher set, live"* | Full live DJ engine — transitions, phases, auto-refill |
-| *"stop engine"* | Kills librespot, Spotify falls back to your normal device |
-
-### Engine tools
-
-| Tool | What it does |
-|---|---|
-| `engine_start` | Spawn librespot + transfer Spotify playback to it |
-| `engine_stop` | Kill the engine, release the device |
-| `engine_filter` | Enable lowpass or highpass biquad filter. Supports sweep (start_freq → freq over duration_ms) |
-| `engine_filter_off` | Disable filter |
-| `engine_echo` | Enable echo delay (delay_ms, feedback 0–1) |
-| `engine_echo_off` | Disable echo |
-| `engine_volume` | Set volume 0–1 with optional ramp_ms |
-| `engine_status` | Is the engine running? Current DSP state |
-
-### Requirements
-
-- macOS or Linux (Windows not yet supported)
-- librespot installed (see above)
-- Spotify Premium (same requirement as the rest of the MCP)
-
----
-
 ## All tools
-
-### Core
 
 | Tool | What it does |
 |---|---|
@@ -322,26 +213,14 @@ Claude spawns librespot as a Spotify Connect device called **spotify-mcp DJ**, w
 | `get_album` | Album details + tracklist |
 | `add_to_queue` | Queue a specific track URI |
 
-### DJ Mode
-
-| Tool | What it does |
-|---|---|
-| `dj_set` | Build and play a full DJ set. Pass `style` for a headliner style profile, `live=true` for the autonomous engine |
-| `dj_transition` | Fire a transition to the next track: fade, cut, stutter, echo, swell, spinback |
-| `cut_early` | Cut the current track now with a chosen transition style |
-| `stop_dj` | Stop the live DJ engine. Music keeps playing, auto-transitions stop. |
-
 ---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `server.js` | MCP server — core + DJ mode |
+| `server.js` | MCP server |
 | `auth-setup.js` | One-time OAuth setup |
-| `dj-engine/engine.js` | Real-time DSP — biquad filter, echo, volume ramp, stutter, swell |
-| `dj-engine/index.js` | librespot orchestrator — spawns process, wires PCM pipeline |
-| `dj-engine/setup.js` | librespot installer — brew/apt/GitHub release download |
 | `.spotify-config.json` | Client ID + Secret (**gitignored**) |
 | `.spotify-tokens.json` | Auth tokens, auto-managed (**gitignored**) |
 | `.spotify-prefs.json` | Your personal config (**gitignored**) |
