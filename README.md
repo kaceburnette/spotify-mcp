@@ -227,6 +227,62 @@ The engine also auto-refills the track pool when it runs low, so the set never s
 
 ---
 
+## DJ Audio Engine
+
+The audio engine routes Spotify's raw PCM stream through real DSP — biquad filters, echo delay lines, volume ramps. It's what makes cuts, sweeps, and effects actually sound like a DJ and not just a skip button.
+
+This is opt-in and separate from everything else. The core MCP (vibe detection, mood engine, playback control) works without it.
+
+### Install
+
+```bash
+# macOS
+brew install librespot
+
+# Linux
+sudo apt install librespot
+
+# Or let the setup script handle it
+node dj-engine/setup.js
+```
+
+### Start the engine
+
+Tell Claude: *"start engine"* — or in any Claude Code session just say it naturally.
+
+Claude spawns librespot as a Spotify Connect device called **spotify-mcp DJ**, waits for it to register, then transfers your playback to it automatically. From that point on all audio flows through the engine.
+
+### What you can do
+
+| Say this | What happens |
+|---|---|
+| *"sweep the filter down"* | Lowpass sweep from 20kHz → 200Hz over 3 seconds |
+| *"add echo"* | Delay line kicks in (300ms, 40% feedback) |
+| *"stutter it"* | Rapid volume chops × 4 |
+| *"do a Fisher set, live"* | Full live DJ engine — transitions, phases, auto-refill |
+| *"stop engine"* | Kills librespot, Spotify falls back to your normal device |
+
+### Engine tools
+
+| Tool | What it does |
+|---|---|
+| `engine_start` | Spawn librespot + transfer Spotify playback to it |
+| `engine_stop` | Kill the engine, release the device |
+| `engine_filter` | Enable lowpass or highpass biquad filter. Supports sweep (start_freq → freq over duration_ms) |
+| `engine_filter_off` | Disable filter |
+| `engine_echo` | Enable echo delay (delay_ms, feedback 0–1) |
+| `engine_echo_off` | Disable echo |
+| `engine_volume` | Set volume 0–1 with optional ramp_ms |
+| `engine_status` | Is the engine running? Current DSP state |
+
+### Requirements
+
+- macOS or Linux (Windows not yet supported)
+- librespot installed (see above)
+- Spotify Premium (same requirement as the rest of the MCP)
+
+---
+
 ## All tools
 
 ### Core
@@ -283,6 +339,9 @@ The engine also auto-refills the track pool when it runs low, so the set never s
 |---|---|
 | `server.js` | MCP server — core + DJ mode |
 | `auth-setup.js` | One-time OAuth setup |
+| `dj-engine/engine.js` | Real-time DSP — biquad filter, echo, volume ramp, stutter, swell |
+| `dj-engine/index.js` | librespot orchestrator — spawns process, wires PCM pipeline |
+| `dj-engine/setup.js` | librespot installer — brew/apt/GitHub release download |
 | `.spotify-config.json` | Client ID + Secret (**gitignored**) |
 | `.spotify-tokens.json` | Auth tokens, auto-managed (**gitignored**) |
 | `.spotify-prefs.json` | Your personal config (**gitignored**) |
