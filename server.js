@@ -815,7 +815,7 @@ async function refillDJPool() {
   const results = [];
   for (const q of [`${djLive.genre} ${djLive.phase}`, `${djLive.genre} electronic energy`]) {
     try {
-      const sr = await spotifyFetch('/search', { query: { q, type: 'track', limit: 50 } });
+      const sr = await spotifyFetch('/search', { query: { q, type: 'track', limit: 10 } });
       results.push(...(sr?.tracks?.items ?? []).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !djLive.usedUris.has(t.uri)));
     } catch (_) {}
   }
@@ -948,7 +948,7 @@ server.tool('dj_set',
     const pullTracks = async (query) => {
       // Track search is primary — always accessible, no 403 issues
       try {
-        const sr = await spotifyFetch('/search', { query: { q: query, type: 'track', limit: 50 } });
+        const sr = await spotifyFetch('/search', { query: { q: query, type: 'track', limit: 10 } });
         const tracks = (sr?.tracks?.items ?? []).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !usedUris.has(t.id));
         if (tracks.length >= 3) return tracks;
       } catch (_) {}
