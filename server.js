@@ -612,47 +612,48 @@ async function setVol(v) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Five real transition styles modeled on what DJs actually do at live sets
-async function performTransition(style, vol) {
+// nextUri: if provided, plays that track directly (live DJ mode). Otherwise skips to queued next.
+async function performTransition(style, vol, nextUri = null) {
+  const playNext = nextUri
+    ? async () => spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [nextUri] } })
+    : async () => spotifyFetch('/me/player/next', { method: 'POST' });
+
   switch (style) {
 
     case 'cut': {
-      // Instant drop → skip → instant back. Hard and aggressive.
       await setVol(0);
-      await spotifyFetch('/me/player/next', { method: 'POST' });
+      await playNext();
       await sleep(400);
       await setVol(vol);
       break;
     }
 
     case 'stutter': {
-      // Rapid fader chops → skip → fade in. Classic DJ fader technique.
       for (let i = 0; i < 4; i++) {
         await setVol(0); await sleep(80);
         await setVol(vol); await sleep(80);
       }
       await setVol(0);
-      await spotifyFetch('/me/player/next', { method: 'POST' });
+      await playNext();
       await sleep(400);
       for (let i = 1; i <= 8; i++) { await setVol(vol * i / 8); await sleep(120); }
       break;
     }
 
     case 'echo': {
-      // Cascading volume drops simulating a reverb/echo tail, then cut.
       const echoes = [0.9, 0.5, 0.85, 0.4, 0.7, 0.25, 0.5, 0.1, 0];
       for (const level of echoes) { await setVol(vol * level); await sleep(150); }
-      await spotifyFetch('/me/player/next', { method: 'POST' });
+      await playNext();
       await sleep(500);
       for (let i = 1; i <= 10; i++) { await setVol(vol * i / 10); await sleep(100); }
       break;
     }
 
     case 'swell': {
-      // Volume builds UP (energy swell), then sharp cut into next track.
       for (let i = 0; i <= 5; i++) { await setVol(Math.min(100, vol + (20 * i / 5))); await sleep(150); }
       await sleep(200);
       await setVol(0);
-      await spotifyFetch('/me/player/next', { method: 'POST' });
+      await playNext();
       await sleep(400);
       for (let i = 1; i <= 8; i++) { await setVol(vol * i / 8); await sleep(150); }
       break;
@@ -660,14 +661,85 @@ async function performTransition(style, vol) {
 
     case 'fade':
     default: {
-      // Smooth fade out → skip → fade in. Classic club mix.
       for (let i = 9; i >= 0; i--) { await setVol(vol * i / 10); await sleep(300); }
-      await spotifyFetch('/me/player/next', { method: 'POST' });
+      await playNext();
       await sleep(600);
       for (let i = 1; i <= 10; i++) { await setVol(vol * i / 10); await sleep(300); }
       break;
     }
   }
+}
+
+// ── Live DJ Engine ────────────────────────────────────────────────────────────
+
+const PHASE_STYLES = {
+  'warm up': ['fade', 'fade', 'swell'],
+  'build':   ['swell', 'cut', 'swell'],
+  'peak':    ['stutter', 'echo', 'cut', 'stutter'],
+  'outro':   ['fade', 'fade'],
+};
+
+const djLive = {
+  active: false, genre: null, phase: 'peak',
+  pool: [], usedUris: new Set(),
+  lastTransition: 0, transitioning: false, timer: null,
+};
+
+function stopLiveDJ() {
+  if (djLive.timer) { clearInterval(djLive.timer); djLive.timer = null; }
+  djLive.active = false;
+  djLive.pool   = [];
+}
+
+async function refillDJPool() {
+  const results = [];
+  for (const q of [`${djLive.genre} ${djLive.phase}`, `${djLive.genre} electronic energy`]) {
+    try {
+      const sr = await spotifyFetch('/search', { query: { q, type: 'track', limit: 50 } });
+      results.push(...(sr?.tracks?.items ?? []).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !djLive.usedUris.has(t.uri)));
+    } catch (_) {}
+  }
+  return shuffle(results);
+}
+
+async function startLiveDJ(genre, phase, pool) {
+  stopLiveDJ();
+  djLive.active         = true;
+  djLive.genre          = genre;
+  djLive.phase          = phase;
+  djLive.pool           = [...pool];
+  djLive.usedUris       = new Set(pool.map(t => t.uri));
+  djLive.lastTransition = 0;
+  djLive.transitioning  = false;
+
+  djLive.timer = setInterval(async () => {
+    if (!djLive.active || djLive.transitioning) return;
+    try {
+      const player = await spotifyFetch('/me/player');
+      if (!player?.is_playing || !player?.item) return;
+      const remaining = player.item.duration_ms - player.progress_ms;
+      const now = Date.now();
+      if (now - djLive.lastTransition < 25000) return; // debounce
+      if (remaining > 12000 || remaining <= 0) return;  // not in transition window
+
+      if (djLive.pool.length < 3) {
+        const more = await refillDJPool();
+        djLive.pool.push(...more);
+      }
+      const next = djLive.pool.shift();
+      if (!next) return;
+
+      djLive.usedUris.add(next.uri);
+      djLive.lastTransition = now;
+      djLive.transitioning  = true;
+
+      const vol    = player.device?.volume_percent ?? 80;
+      const styles = PHASE_STYLES[djLive.phase] ?? ['fade', 'cut'];
+      const style  = styles[Math.floor(Math.random() * styles.length)];
+      await performTransition(style, vol, next.uri);
+    } catch (_) {}
+    djLive.transitioning = false;
+  }, 3000);
 }
 
 server.tool('dj_transition',
@@ -707,13 +779,14 @@ server.tool('cut_early',
 );
 
 server.tool('dj_set',
-  'Build a real DJ set with a warm up → build → peak arc. Uses your actual top artists as seeds so it sounds personal, not random. Queues tracks in order — no shuffle. Claude should call this when the user wants a full set.',
+  'Build a DJ set with a warm up → build → peak arc. live=true enables the live DJ engine: auto-transitions fire between every track with style matching the phase (warm up=fade/swell, build=swell/cut, peak=stutter/echo/cut). No pre-queueing in live mode — the engine drives everything. Call stop_dj to end the session.',
   {
     genre:          z.string().describe('Genre or vibe: "techno", "house", "hip hop", "trance", "drum and bass", etc.'),
     tracks:         z.number().min(4).max(20).default(10).describe('Total tracks in the set'),
     include_outro:  z.boolean().default(false).describe('Add a cool-down phase after peak'),
+    live:           z.boolean().default(false).describe('Enable live DJ engine — auto-transitions between every track. Only use when user explicitly requests a live/automatic DJ set.'),
   },
-  async ({ genre, tracks, include_outro }) => {
+  async ({ genre, tracks, include_outro, live }) => {
     // Pull user's top artists to seed personal taste into the set
     let topArtistNames = [];
     try {
@@ -730,9 +803,8 @@ server.tool('dj_set',
       { label: 'outro',   queries: [`${genre} cool down closing outro`,        `${genre} end of night closing set`],        share: 0.15 }
     );
 
-    const setList   = [];
+    const allTracks = []; // { phase, track } — full set in order
     const usedUris  = new Set();
-    let   firstDone = false;
 
     const pullTracks = async (query) => {
       // Track search is primary — always accessible, no 403 issues
@@ -741,7 +813,7 @@ server.tool('dj_set',
         const tracks = (sr?.tracks?.items ?? []).filter(t => t?.id && t?.uri && !isBlacklisted(t) && !usedUris.has(t.id));
         if (tracks.length >= 3) return tracks;
       } catch (_) {}
-      // Fallback: try playlists (some are accessible)
+      // Fallback: playlists (some are accessible, many 403 — iterate until one works)
       try {
         const sr  = await spotifyFetch('/search', { query: { q: query, type: 'playlist', limit: 10 } });
         const pls = (sr?.playlists?.items ?? []).filter(p => p?.id);
@@ -758,44 +830,61 @@ server.tool('dj_set',
       return [];
     };
 
+    // Phase 1: collect all tracks without playing anything yet
     for (const phase of phases) {
       const needed = Math.max(1, Math.round(tracks * phase.share));
       let   pool   = [];
 
-      // Mix: playlist discovery + personal taste seeded with top artist names
       await Promise.allSettled(phase.queries.map(async q => {
         try { pool.push(...await pullTracks(q)); } catch (_) {}
       }));
 
-      // Sprinkle in top artist tracks if we have them (makes the set personal)
       if (topArtistNames.length) {
         const artistSeed = topArtistNames[Math.floor(Math.random() * topArtistNames.length)];
         try { pool.push(...await pullTracks(`${artistSeed} ${genre}`)); } catch (_) {}
       }
 
       shuffle(pool);
-      const picked = [];
       for (const t of pool) {
-        if (picked.length >= needed) break;
-        if (!usedUris.has(t.id)) { picked.push(t); usedUris.add(t.id); }
-      }
-
-      for (const t of picked) {
-        if (!firstDone) {
-          await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [t.uri] } });
-          await sleep(800);
-          await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: false } });
-          firstDone = true;
-        } else {
-          try { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: t.uri } }); } catch (_) {}
+        if (allTracks.length - allTracks.filter(x => x.phase !== phase.label).length >= needed) break;
+        if (!usedUris.has(t.id)) {
+          allTracks.push({ phase: phase.label, track: t });
+          usedUris.add(t.id);
         }
-        setList.push({ phase: phase.label, name: t.name, artist: t.artists?.map(a => a.name).join(', ') });
       }
     }
 
-    return { content: [{ type: 'text', text: JSON.stringify({ set_built: true, genre, total_tracks: setList.length, personal_seeds: topArtistNames, tracklist: setList }, null, 2) }] };
+    const setList = allTracks.map(({ phase, track }) => ({ phase, name: track.name, artist: track.artists?.map(a => a.name).join(', ') }));
+
+    if (allTracks.length === 0) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: 'No tracks found. Try a different genre or check Spotify is open.' }) }] };
+    }
+
+    // Phase 2: start playback
+    await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [allTracks[0].track.uri] } });
+    await sleep(800);
+    await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: false } });
+
+    if (live) {
+      // Hand remaining tracks to the live engine — it drives transitions from here
+      const livePool    = allTracks.slice(1).map(x => x.track);
+      const startPhase  = allTracks[0].phase;
+      await startLiveDJ(genre, startPhase, livePool);
+    } else {
+      // Pre-queue everything in order
+      for (const { track } of allTracks.slice(1)) {
+        try { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: track.uri } }); } catch (_) {}
+      }
+    }
+
+    return { content: [{ type: 'text', text: JSON.stringify({ set_built: true, live_dj: djLive.active, genre, total_tracks: setList.length, personal_seeds: topArtistNames, tracklist: setList }, null, 2) }] };
   }
 );
+
+server.tool('stop_dj', 'Stop the live DJ engine. Playback continues but auto-transitions stop firing.', {}, async () => {
+  stopLiveDJ();
+  return { content: [{ type: 'text', text: JSON.stringify({ live_dj: false, message: 'Live DJ engine stopped. Music keeps playing.' }) }] };
+});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
