@@ -1,16 +1,19 @@
 # spotify-mcp
 
-Spotify MCP server for Claude Code. Detects your vibe from session context, keeps a mood-matched queue running, and controls everything through natural language.
+Most Spotify MCPs are remote controls. This one reads your session and sets the mood automatically.
+
+Built for Claude Code. Drop it in and it watches what you're working on — the files open, what you type, the time of day — and keeps the right energy going without you touching it.
 
 ---
 
 ## What it does
 
-- **Vibe detection** — Claude reads what you're working on and auto-picks the right music. Say "deep focus coding vibes" or "I just shipped" and it switches playlists immediately.
-- **Persistent mood** — mood and session state survive server restarts. Your grind session doesn't reset because you closed a tab.
-- **Smart queue** — never runs out. Pulls from your top tracks, artist catalogs, and mood-matched playlists. Same song never plays twice in a session.
-- **Fully configurable** — startup mood, per-mood playlist keywords, artist/track blacklist. All in `.spotify-prefs.json`.
-- **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024. Uses top tracks, artist catalogs, and playlist search only.
+- **Auto vibe detection** — Claude reads your session context and picks the mood. Say "deep focus" or "I just shipped" and it switches instantly. Or say nothing and it figures it out.
+- **16 moods** — from `grind` and `lock_in` to `wind_down` and `in_my_feels`. Each maps to real genre keywords that search live playlists.
+- **Persistent session** — mood and seen-tracks state survive server restarts. Your grind session doesn't reset because you closed a tab.
+- **Smart queue** — never runs out, never repeats. Pulls from your top tracks, artist catalogs, and mood-matched playlists.
+- **Full Spotify control** — search, playlists, queue, volume, liked songs, top artists, everything. Natural language, no UI switching.
+- **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024.
 
 ---
 
