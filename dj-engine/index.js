@@ -31,6 +31,10 @@ let _active    = false;
 async function start(deviceName = DEVICE_NAME) {
   if (_active) await stop();
 
+  // Kill any orphaned processes from previous server runs
+  try { require('child_process').execSync('pkill -f librespot 2>/dev/null; pkill -f "/opt/homebrew/bin/play" 2>/dev/null', { stdio: 'ignore' }); } catch (_) {}
+  await new Promise(r => setTimeout(r, 300));
+
   if (process.platform === 'win32') {
     throw new Error('Windows not yet supported.');
   }

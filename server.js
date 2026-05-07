@@ -728,17 +728,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Five real transition styles modeled on what DJs actually do at live sets
 // nextUri: if provided, plays that track directly (live DJ mode). Otherwise skips to queued next.
-async function performTransition(style, vol, nextUri = null, introSkipMs = 30000) {
+async function performTransition(style, vol, nextUri = null) {
   const playNext = nextUri
     ? async () => spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [nextUri] } })
     : async () => spotifyFetch('/me/player/next', { method: 'POST' });
 
   const playAndSeek = async () => {
     await playNext();
-    if (introSkipMs > 0) {
-      await sleep(350);
-      await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: introSkipMs } }).catch(() => {});
-    }
   };
 
   const eng = djEngine?.getEngine?.();
