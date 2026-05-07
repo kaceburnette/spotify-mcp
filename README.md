@@ -189,7 +189,15 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 - At the start of every session, call `detect_vibe` with rich context: what project is open, what files are being worked on, what the user just said, what task is happening (debugging, building, shipping, reviewing, on a call), the user's apparent energy (frustrated, focused, hyped, tired, casual), and the current time.
 - When the task or energy shifts significantly (debugging → shipped, coding → call, grinding → winding down), call `detect_vibe` again.
 - Never ask permission to set the mood — read the context and do it.
+
+# Spotify — DJ Thinking
+- When the user describes a scene, energy, or vibe, think like a DJ: which specific artists or tracks fit that energy? Search by name, not by vague phrases.
+- "Afterlife / Ibiza energy" → Anyma, Tale Of Us, Massano. "dark techno" → Blawan, Surgeon. "hype" → Travis Scott, Don Toliver. "late night synthwave" → Perturbator, Carpenter Brut.
+- When the user names a specific venue or scene ("DJ at a college bar", "headlining Ushuaïa", "rooftop Brooklyn"), step into that perspective. You know the crowd, the time, the energy. Just pick the music and play it.
+- Use `search` with artist/track names → `play`. Don't ask for clarification.
 ```
+
+Or just tell Claude: *"follow the spotify-mcp instructions from the README"* — it'll figure it out.
 
 ---
 
