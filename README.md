@@ -213,6 +213,42 @@ Add this to `~/.claude/CLAUDE.md` so Claude reads your session and sets the vibe
 | `get_artist` | Artist info + top tracks + albums |
 | `get_album` | Album details + tracklist |
 | `add_to_queue` | Queue a specific track URI |
+| `dj_set` | Build a multi-phase DJ set (warm up → build → peak → outro) seeded from your top artists |
+| `dj_transition` | Transition to the next track with a style: `fade`, `cut`, `stutter`, `echo`, `swell` |
+| `cut_early` | Jump to the end of the current track and transition |
+
+---
+
+## DJ Mode
+
+### `dj_set`
+
+Builds and plays a full DJ set arc seeded from your actual top artists. Phases:
+
+| Phase | Energy | Length |
+|---|---|---|
+| Warm up | Low → medium | ~4 tracks |
+| Build | Medium → high | ~5 tracks |
+| Peak | High → max | ~6 tracks |
+| Outro | Medium | ~3 tracks (optional) |
+
+Each phase searches for mood-matched playlists, pulls tracks, deduplicates against the full session, and queues them in order. Never shuffle — the arc is intentional.
+
+Tell Claude: *"build me a DJ set"* or *"play a peak hour techno set"* and it picks the mood, seeds from your top artists, and runs the arc.
+
+### `dj_transition`
+
+Transition styles:
+
+| Style | What it sounds like |
+|---|---|
+| `fade` | 3-second fade out, skip, 3-second fade in |
+| `cut` | Hard drop to 0, instant skip, snap back to volume |
+| `stutter` | Fader chop × 4, hard cut, 8-step fade in |
+| `echo` | Reverb cascade (9 steps), skip, fade in |
+| `swell` | Volume surges to peak, hard drop, skip, fade in |
+
+Tell Claude: *"hit me with an echo transition"* or *"stutter cut to the next track"*.
 
 ---
 
