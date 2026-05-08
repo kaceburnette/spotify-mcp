@@ -282,6 +282,8 @@ Or just tell Claude: *"follow the spotify-mcp instructions from the README"* —
 
 **Scopes didn't update after re-auth** — Spotify caches app approval and skips the consent screen. The fix above (remove app access first) forces it to show again.
 
+**Can't scrub or fast forward in the Spotify app** — When the MCP has active API control, Spotify locks out manual UI controls (scrubbing, sometimes skipping). Try tapping play or pause directly in Spotify to break the API lock and hand control back to the local UI. If that doesn't work, the lock releases on its own when the current track ends. Force-quitting and reopening Spotify also works but isn't necessary.
+
 ---
 
 ## License
