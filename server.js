@@ -266,13 +266,13 @@ async function discoverTracks(count = 15) {
     spotifyFetch('/me/top/tracks', { query: { time_range: 'medium_term', limit: 50 } }).then(r => add(r?.items)),
   ]);
 
-  // Source 2: top artist catalogs
+  // Source 2: top artist catalogs via search
   try {
     const r = await spotifyFetch('/me/top/artists', { query: { time_range: 'short_term', limit: 15 } });
     if (r?.items?.length) {
       await Promise.allSettled(
         shuffle([...r.items]).slice(0, 3).map(a =>
-          spotifyFetch(`/artists/${a.id}/top-tracks`, { query: { market: 'US' } }).then(r => add(r?.tracks))
+          spotifyFetch('/search', { query: { q: `artist:${a.name}`, type: 'track', limit: 10 } }).then(r => add(r?.tracks?.items))
         )
       );
     }
@@ -612,7 +612,7 @@ server.tool('transfer_playback', 'Transfer playback to a device.', { device_id: 
 // ── Search + Library ──────────────────────────────────────────────────────────
 
 server.tool('search', 'Search tracks, artists, albums, or playlists.', {
-  query: z.string(), type: z.enum(['track', 'artist', 'album', 'playlist']).default('track'), limit: z.number().min(1).max(20).default(10),
+  query: z.string(), type: z.enum(['track', 'artist', 'album', 'playlist']).default('track'), limit: z.number().min(1).max(10).default(10),
 }, async ({ query, type, limit }) => {
   const data = await spotifyFetch('/search', { query: { q: query, type, limit } });
   let items = [];
@@ -659,14 +659,14 @@ server.tool('get_top_tracks',    'Get your top tracks.',   { time_range: z.enum(
 server.tool('get_top_artists',   'Get your top artists.',  { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/artists',  { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(a => ({ name: a.name, genres: a.genres, popularity: a.popularity, uri: a.uri })), null, 2) }] }; });
 server.tool('get_recently_played','Get recently played.', { limit: z.number().min(1).max(50).default(20) }, async ({ limit }) => { const data = await spotifyFetch('/me/player/recently-played', { query: { limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => ({ ...fmtTrack(i.track), played_at: i.played_at })), null, 2) }] }; });
 
-server.tool('get_artist', 'Get artist details and top tracks.', { artist_id: z.string() }, async ({ artist_id }) => {
+server.tool('get_artist', 'Get artist details and recent albums.', { artist_id: z.string() }, async ({ artist_id }) => {
   const id = artist_id.includes(':') ? artist_id.split(':').pop() : artist_id;
-  const [artist, topTracks, albums] = await Promise.all([
+  const [artist, tracks, albums] = await Promise.all([
     spotifyFetch(`/artists/${id}`),
-    spotifyFetch(`/artists/${id}/top-tracks`, { query: { market: 'US' } }),
+    spotifyFetch('/search', { query: { q: `artist:${artist_id.includes(':') ? artist_id.split(':').pop() : artist_id}`, type: 'track', limit: 10 } }),
     spotifyFetch(`/artists/${id}/albums`, { query: { limit: 10 } }),
   ]);
-  return { content: [{ type: 'text', text: JSON.stringify({ name: artist.name, genres: artist.genres, followers: artist.followers?.total, popularity: artist.popularity, uri: artist.uri, top_tracks: (topTracks?.tracks ?? []).map(fmtTrack), recent_albums: (albums?.items ?? []).map(a => ({ name: a.name, release_date: a.release_date, total_tracks: a.total_tracks, uri: a.uri })) }, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({ name: artist.name, genres: artist.genres, followers: artist.followers?.total, popularity: artist.popularity, uri: artist.uri, top_tracks: (tracks?.tracks?.items ?? []).map(fmtTrack), recent_albums: (albums?.items ?? []).map(a => ({ name: a.name, release_date: a.release_date, total_tracks: a.total_tracks, uri: a.uri })) }, null, 2) }] };
 });
 
 server.tool('get_album', 'Get album details and track list.', { album_id: z.string() }, async ({ album_id }) => {
