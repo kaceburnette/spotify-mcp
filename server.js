@@ -289,7 +289,7 @@ async function discoverTracks(count = 15) {
         const pl    = playlists[Math.floor(Math.random() * playlists.length)];
         const total = pl.tracks?.total ?? 100;
         const offset = Math.max(0, Math.floor(Math.random() * Math.max(1, total - 25)));
-        const pr = await spotifyFetch(`/playlists/${pl.id}/tracks`, { query: { limit: 25, offset } });
+        const pr = await spotifyFetch(`/playlists/${pl.id}/items`, { query: { limit: 25, offset } });
         add((pr?.items ?? []).map(i => i?.track).filter(t => t?.id));
       } catch (_) {}
     }));
@@ -630,19 +630,18 @@ server.tool('get_playlists', 'Get your playlists.', { limit: z.number().min(1).m
 
 server.tool('get_playlist_tracks', 'Get tracks in a playlist.', { playlist_id: z.string(), limit: z.number().min(1).max(50).default(30) }, async ({ playlist_id, limit }) => {
   const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
-  const data = await spotifyFetch(`/playlists/${id}/tracks`, { query: { limit } });
+  const data = await spotifyFetch(`/playlists/${id}/items`, { query: { limit } });
   return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).filter(i => i?.track).map(i => ({ ...fmtTrack(i.track), added_at: i.added_at })), null, 2) }] };
 });
 
 server.tool('create_playlist', 'Create a new playlist.', { name: z.string(), description: z.string().optional(), public: z.boolean().default(false) }, async ({ name, description, public: pub }) => {
-  const me   = await spotifyFetch('/me');
-  const data = await spotifyFetch(`/users/${me.id}/playlists`, { method: 'POST', body: { name, description: description ?? '', public: pub } });
+  const data = await spotifyFetch('/me/playlists', { method: 'POST', body: { name, description: description ?? '', public: pub } });
   return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, uri: data.uri, url: data.external_urls?.spotify }, null, 2) }] };
 });
 
 server.tool('add_to_playlist', 'Add track URIs to a playlist.', { playlist_id: z.string(), uris: z.array(z.string()) }, async ({ playlist_id, uris }) => {
   const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
-  await spotifyFetch(`/playlists/${id}/tracks`, { method: 'POST', body: { uris } });
+  await spotifyFetch(`/playlists/${id}/items`, { method: 'POST', body: { uris } });
   return { content: [{ type: 'text', text: `Added ${uris.length} track(s)` }] };
 });
 
