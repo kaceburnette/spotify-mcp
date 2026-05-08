@@ -13,7 +13,9 @@ Built for Claude Code. Drop it in and it watches what you're working on — the 
 - **Persistent session** — mood and seen-tracks state survive server restarts. Your grind session doesn't reset because you closed a tab.
 - **Smart queue** — never runs out, never repeats. Pulls from your top tracks, artist catalogs, and mood-matched playlists.
 - **Full Spotify control** — search, playlists, queue, volume, liked songs, top artists, everything. Natural language, no UI switching.
-- **No deprecated APIs** — rebuilt after Spotify killed `/recommendations` in Nov 2024.
+- **Playlist management** — create playlists and add tracks instantly. Vibe → playlist in one shot.
+- **Token-efficient** — slim response payloads throughout. Parallel searches stay cheap.
+- **No deprecated APIs** — updated after Spotify's Feb 2026 API changes (migrated all `/tracks` endpoints to `/items`, replaced removed `top-tracks` with search).
 
 ---
 
@@ -275,6 +277,10 @@ Or just tell Claude: *"follow the spotify-mcp instructions from the README"* —
 **Music not switching on vibe change** — Make sure Spotify is open and has been played on recently (see above).
 
 **Want to reset the vibe** — Tell Claude `"clear session"` to wipe seen tracks and start discovery fresh.
+
+**Playlist tools returning 403** — Your token may have stale scopes from a previous auth. Fix: go to [spotify.com/account/apps](https://www.spotify.com/account/apps), remove access for your app, then run `node auth-setup.js` again. The auth page will force a fresh scope grant.
+
+**Scopes didn't update after re-auth** — Spotify caches app approval and skips the consent screen. The fix above (remove app access first) forces it to show again.
 
 ---
 

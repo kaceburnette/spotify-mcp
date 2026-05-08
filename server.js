@@ -391,8 +391,9 @@ const fmtMs = ms => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) 
 
 function fmtTrack(t) {
   if (!t) return null;
-  return { name: t.name, artist: t.artists?.map(a => a.name).join(', '), album: t.album?.name, duration: fmtMs(t.duration_ms), uri: t.uri, url: t.external_urls?.spotify, id: t.id };
+  return { name: t.name, artist: t.artists?.map(a => a.name).join(', '), album: t.album?.name, duration: fmtMs(t.duration_ms), uri: t.uri };
 }
+const fmtTrackSlim = t => t ? { name: t.name, artist: t.artists?.map(a => a.name).join(', '), uri: t.uri } : null;
 
 function fmtPlayback(s) {
   if (!s?.item) return { playing: false, message: 'Nothing currently playing' };
@@ -596,7 +597,7 @@ server.tool('add_to_queue', 'Add a track URI to the queue.', { uri: z.string() }
 
 server.tool('get_queue', 'Get the current playback queue.', {}, async () => {
   const data = await spotifyFetch('/me/player/queue');
-  return { content: [{ type: 'text', text: JSON.stringify({ currently_playing: fmtTrack(data?.currently_playing), queue: (data?.queue ?? []).slice(0, 20).map(fmtTrack) }, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({ now: fmtTrackSlim(data?.currently_playing), queue: (data?.queue ?? []).slice(0, 10).map(fmtTrackSlim) }) }] };
 });
 
 server.tool('get_devices', 'List available playback devices.', {}, async () => {
@@ -616,22 +617,22 @@ server.tool('search', 'Search tracks, artists, albums, or playlists.', {
 }, async ({ query, type, limit }) => {
   const data = await spotifyFetch('/search', { query: { q: query, type, limit } });
   let items = [];
-  if (type === 'track')    items = (data?.tracks?.items    ?? []).map(fmtTrack);
-  else if (type === 'artist')   items = (data?.artists?.items  ?? []).map(a => ({ name: a.name, genres: a.genres, followers: a.followers?.total, popularity: a.popularity, uri: a.uri }));
-  else if (type === 'album')    items = (data?.albums?.items   ?? []).map(a => ({ name: a.name, artist: a.artists?.map(ar => ar.name).join(', '), release_date: a.release_date, total_tracks: a.total_tracks, uri: a.uri }));
-  else if (type === 'playlist') items = (data?.playlists?.items ?? []).filter(p => p).map(p => ({ name: p.name, owner: p.owner?.display_name, tracks: p.tracks?.total, uri: p.uri }));
-  return { content: [{ type: 'text', text: JSON.stringify(items, null, 2) }] };
+  if (type === 'track')    items = (data?.tracks?.items    ?? []).map(fmtTrackSlim);
+  else if (type === 'artist')   items = (data?.artists?.items  ?? []).map(a => ({ name: a.name, uri: a.uri }));
+  else if (type === 'album')    items = (data?.albums?.items   ?? []).map(a => ({ name: a.name, artist: a.artists?.map(ar => ar.name).join(', '), uri: a.uri }));
+  else if (type === 'playlist') items = (data?.playlists?.items ?? []).filter(p => p).map(p => ({ name: p.name, uri: p.uri }));
+  return { content: [{ type: 'text', text: JSON.stringify(items) }] };
 });
 
 server.tool('get_playlists', 'Get your playlists.', { limit: z.number().min(1).max(50).default(20) }, async ({ limit }) => {
   const data = await spotifyFetch('/me/playlists', { query: { limit } });
-  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(p => ({ name: p.name, tracks: p.tracks?.total, owner: p.owner?.display_name, uri: p.uri, url: p.external_urls?.spotify })), null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(p => ({ name: p.name, uri: p.uri }))) }] };
 });
 
 server.tool('get_playlist_tracks', 'Get tracks in a playlist.', { playlist_id: z.string(), limit: z.number().min(1).max(50).default(30) }, async ({ playlist_id, limit }) => {
   const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
   const data = await spotifyFetch(`/playlists/${id}/items`, { query: { limit } });
-  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).filter(i => i?.track).map(i => ({ ...fmtTrack(i.track), added_at: i.added_at })), null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).filter(i => i?.track).map(i => fmtTrackSlim(i.track))) }] };
 });
 
 server.tool('create_playlist', 'Create a new playlist.', { name: z.string(), description: z.string().optional(), public: z.boolean().default(false) }, async ({ name, description, public: pub }) => {
@@ -647,7 +648,7 @@ server.tool('add_to_playlist', 'Add track URIs to a playlist.', { playlist_id: z
 
 server.tool('get_saved_tracks', 'Get liked/saved tracks.', { limit: z.number().min(1).max(50).default(20), offset: z.number().min(0).default(0) }, async ({ limit, offset }) => {
   const data = await spotifyFetch('/me/tracks', { query: { limit, offset } });
-  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => ({ ...fmtTrack(i.track), saved_at: i.added_at })), null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => fmtTrackSlim(i.track))) }] };
 });
 
 server.tool('save_track',         'Like/save tracks.',         { track_ids: z.array(z.string()) }, async ({ track_ids }) => { await spotifyFetch('/me/tracks', { method: 'PUT',    body: { ids: track_ids } }); return { content: [{ type: 'text', text: `Saved ${track_ids.length} track(s)` }] }; });
@@ -655,9 +656,9 @@ server.tool('remove_saved_track', 'Unlike/remove saved tracks.', { track_ids: z.
 
 // ── Discovery ─────────────────────────────────────────────────────────────────
 
-server.tool('get_top_tracks',    'Get your top tracks.',   { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/tracks',   { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(fmtTrack), null, 2) }] }; });
-server.tool('get_top_artists',   'Get your top artists.',  { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/artists',  { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(a => ({ name: a.name, genres: a.genres, popularity: a.popularity, uri: a.uri })), null, 2) }] }; });
-server.tool('get_recently_played','Get recently played.', { limit: z.number().min(1).max(50).default(20) }, async ({ limit }) => { const data = await spotifyFetch('/me/player/recently-played', { query: { limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => ({ ...fmtTrack(i.track), played_at: i.played_at })), null, 2) }] }; });
+server.tool('get_top_tracks',    'Get your top tracks.',   { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/tracks',   { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(fmtTrackSlim)) }] }; });
+server.tool('get_top_artists',   'Get your top artists.',  { time_range: z.enum(['short_term', 'medium_term', 'long_term']).default('medium_term'), limit: z.number().min(1).max(50).default(20) }, async ({ time_range, limit }) => { const data = await spotifyFetch('/me/top/artists',  { query: { time_range, limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(a => ({ name: a.name, uri: a.uri }))) }] }; });
+server.tool('get_recently_played','Get recently played.', { limit: z.number().min(1).max(50).default(20) }, async ({ limit }) => { const data = await spotifyFetch('/me/player/recently-played', { query: { limit } }); return { content: [{ type: 'text', text: JSON.stringify((data?.items ?? []).map(i => fmtTrackSlim(i.track))) }] }; });
 
 server.tool('get_artist', 'Get artist details and recent albums.', { artist_id: z.string() }, async ({ artist_id }) => {
   const id = artist_id.includes(':') ? artist_id.split(':').pop() : artist_id;

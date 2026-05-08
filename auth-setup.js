@@ -60,6 +60,7 @@ const authUrl = 'https://accounts.spotify.com/authorize?' + new URLSearchParams(
   redirect_uri: REDIRECT_URI,
   scope: SCOPES,
   state: 'spotify-mcp',
+  show_dialog: 'true',
 }).toString();
 
 const app = express();
