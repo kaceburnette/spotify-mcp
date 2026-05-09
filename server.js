@@ -463,10 +463,43 @@ function fmtPlayback(s) {
   };
 }
 
+// --- Sleep Timer ---
+
+let sleepTimerId = null;
+let sleepTimerEndsAt = null;
+async function fireSleepTimer() {
+  try { await spotifyFetch('/me/player/pause', { method: 'PUT' }); } catch (_) {}
+  sleepTimerId = null;
+  sleepTimerEndsAt = null;
+}
+
+// --- Session Journal ---
+// When mood changes, auto-save what played during the previous mood as a dated playlist.
+
+async function journalPreviousSession(previousMood, sessionStart) {
+  try {
+    if (!previousMood || !sessionStart) return;
+    const sinceMs = new Date(sessionStart).getTime();
+    const data = await spotifyFetch('/me/player/recently-played', { query: { limit: 50 } });
+    const items = (data?.items ?? []).filter(i => new Date(i.played_at).getTime() >= sinceMs);
+    if (items.length < 5) return; // not worth saving
+    const uris = items.map(i => i.track?.uri).filter(Boolean).reverse(); // chronological order
+    const d = new Date(sessionStart);
+    const pad = n => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+    const name = `${previousMood}-${stamp}`;
+    const pl = await spotifyFetch('/me/playlists', { method: 'POST', body: { name, description: `Auto-saved ${previousMood} session`, public: false } });
+    const id = pl.uri.split(':').pop();
+    for (let i = 0; i < uris.length; i += 100) {
+      await spotifyFetch(`/playlists/${id}/items`, { method: 'POST', body: { uris: uris.slice(i, i + 100) } });
+    }
+  } catch (_) {}
+}
+
 // --- MCP Server ---
 
 function createServer() {
-  const server = new McpServer({ name: 'spotify', version: '3.1.0' });
+  const server = new McpServer({ name: 'spotify', version: '3.2.0' });
 
 // ── Mood ─────────────────────────────────────────────────────────────────────
 
@@ -474,6 +507,10 @@ server.tool('set_mood',
   'Set the listening mood. Call this based on session context — what the user is doing, their energy, what they said. Mood persists across restarts. Available: grind, focus, lock_in, hype, workout, pump_up, chill, relax, wind_down, sad, in_my_feels, angry, night_drive, creative, background, confident.',
   { mood: z.enum(Object.keys(MOOD_PROFILES)).describe('Mood label') },
   async ({ mood }) => {
+    const previousMood = state.mood; const previousStart = state.moodSetAt;
+    if (previousMood && previousMood !== mood) {
+      setImmediate(() => journalPreviousSession(previousMood, previousStart));
+    }
     state.mood = mood; state.moodSetAt = new Date().toISOString(); state.tracksQueued = 0;
     saveState();
     let playing = null;
@@ -497,8 +534,12 @@ server.tool('detect_vibe',
   async ({ context, auto_apply }) => {
     const { recommended, scores } = detectMood(context);
     const previousMood = state.mood;
+    const previousStart = state.moodSetAt;
 
     if (auto_apply) {
+      if (previousMood && previousMood !== recommended) {
+        setImmediate(() => journalPreviousSession(previousMood, previousStart));
+      }
       state.mood = recommended; state.moodSetAt = new Date().toISOString(); state.tracksQueued = 0;
       saveState();
 
@@ -730,6 +771,99 @@ server.tool('build_set',
     return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, uri: data.uri, url: data.external_urls?.spotify, tracks: uris.length }, null, 2) }] };
   }
 );
+
+server.tool('build_arc',
+  'Build a multi-mood playlist with energy progression. Pass segments like [{mood: "chill", minutes: 20}, {mood: "focus", minutes: 30}, {mood: "grind", minutes: 30}]. Tool fetches mood-matched tracks for each segment and assembles them in order.',
+  {
+    name:        z.string().describe('Playlist name'),
+    segments:    z.array(z.object({
+      mood:    z.enum(Object.keys(MOOD_PROFILES)).describe('Mood for this segment'),
+      minutes: z.number().min(5).max(120).describe('Length of this segment in minutes'),
+    })).min(2).max(6).describe('Sequenced mood segments'),
+    description: z.string().optional(),
+    public:      z.boolean().default(false),
+  },
+  async ({ name, segments, description, public: pub }) => {
+    const allUris = [];
+    for (const seg of segments) {
+      const profile = MOOD_PROFILES[seg.mood];
+      if (!profile) continue;
+      const targetCount = Math.max(3, Math.ceil(seg.minutes / 3)); // ~3min/track avg
+      const collected = [];
+      for (const kw of shuffle([...profile.keywords])) {
+        if (collected.length >= targetCount) break;
+        try {
+          const sr = await spotifyFetch('/search', { query: { q: kw, type: 'playlist', limit: 3 } });
+          const playlists = (sr?.playlists?.items ?? []).filter(p => p?.id);
+          if (!playlists.length) continue;
+          const pl = playlists[Math.floor(Math.random() * playlists.length)];
+          const total = pl.tracks?.total ?? 100;
+          const offset = Math.max(0, Math.floor(Math.random() * Math.max(1, total - 25)));
+          const pr = await spotifyFetch(`/playlists/${pl.id}/items`, { query: { limit: 25, offset } });
+          const tracks = (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && !isBlacklisted(t));
+          for (const t of shuffle(tracks)) {
+            if (collected.length >= targetCount) break;
+            if (!collected.find(c => c.id === t.id)) collected.push(t);
+          }
+        } catch (_) {}
+      }
+      allUris.push(...collected.map(t => t.uri));
+    }
+    if (!allUris.length) return { content: [{ type: 'text', text: 'No tracks could be assembled for the arc.' }] };
+    const pl = await spotifyFetch('/me/playlists', { method: 'POST', body: { name, description: description ?? '', public: pub } });
+    const id = pl.uri.split(':').pop();
+    for (let i = 0; i < allUris.length; i += 100) {
+      await spotifyFetch(`/playlists/${id}/items`, { method: 'POST', body: { uris: allUris.slice(i, i + 100) } });
+    }
+    return { content: [{ type: 'text', text: JSON.stringify({ name: pl.name, uri: pl.uri, url: pl.external_urls?.spotify, segments: segments.length, tracks: allUris.length }, null, 2) }] };
+  }
+);
+
+server.tool('identify_track_vibe',
+  'Get rich metadata for a track (artist, genres, era, popularity) so Claude can mood-match it. Use this when a user asks "what mood is this track" or "what vibe is this album."',
+  { track_uri: z.string().describe('Spotify track URI or ID') },
+  async ({ track_uri }) => {
+    const trackId = track_uri.includes(':') ? track_uri.split(':').pop() : track_uri;
+    const track = await spotifyFetch(`/tracks/${trackId}`);
+    if (!track) return { content: [{ type: 'text', text: 'Track not found' }] };
+    const artistId = track.artists?.[0]?.id;
+    const artist = artistId ? await spotifyFetch(`/artists/${artistId}`) : null;
+    return { content: [{ type: 'text', text: JSON.stringify({
+      name:             track.name,
+      artists:          track.artists?.map(a => a.name),
+      album:            track.album?.name,
+      release_year:     track.album?.release_date?.slice(0, 4),
+      duration:         fmtMs(track.duration_ms),
+      popularity:       track.popularity,
+      genres:           artist?.genres ?? [],
+      artist_followers: artist?.followers?.total,
+      explicit:         track.explicit,
+      uri:              track.uri,
+    }, null, 2) }] };
+  }
+);
+
+server.tool('set_sleep_timer',
+  'Pause playback automatically after N minutes. Off by default — only set when user explicitly asks for a sleep timer.',
+  { minutes: z.number().min(1).max(720).describe('Minutes until pause (1-720)') },
+  async ({ minutes }) => {
+    if (sleepTimerId) clearTimeout(sleepTimerId);
+    sleepTimerEndsAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+    sleepTimerId = setTimeout(fireSleepTimer, minutes * 60 * 1000);
+    return { content: [{ type: 'text', text: JSON.stringify({ sleep_timer: 'set', pause_at: sleepTimerEndsAt, minutes }, null, 2) }] };
+  }
+);
+
+server.tool('cancel_sleep_timer', 'Cancel a pending sleep timer.', {}, async () => {
+  if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; sleepTimerEndsAt = null; }
+  return { content: [{ type: 'text', text: 'Sleep timer canceled' }] };
+});
+
+server.tool('get_sleep_timer', 'Check if a sleep timer is active.', {}, async () => {
+  if (!sleepTimerId) return { content: [{ type: 'text', text: JSON.stringify({ active: false }, null, 2) }] };
+  const remaining = Math.max(0, Math.round((new Date(sleepTimerEndsAt).getTime() - Date.now()) / 60000));
+  return { content: [{ type: 'text', text: JSON.stringify({ active: true, pause_at: sleepTimerEndsAt, minutes_remaining: remaining }, null, 2) }] };
+});
 
 server.tool('get_saved_tracks', 'Get liked/saved tracks.', { limit: z.number().min(1).max(50).default(20), offset: z.number().min(0).default(0) }, async ({ limit, offset }) => {
   const data = await spotifyFetch('/me/tracks', { query: { limit, offset } });
