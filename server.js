@@ -215,6 +215,9 @@ async function playMood(mood) {
   }
   if (!firstTrack) return null;
 
+  // Flush old queue before playing so garbage doesn't leak through
+  await flushQueue();
+
   // Play the mood-matched opener
   try {
     await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [firstTrack.uri] }, query });
@@ -268,37 +271,41 @@ function updateSeeds(tracks) {
 }
 
 async function discoverTracks(count = 15) {
-  const candidates = new Map();
+  const moodActive = !!(state.mood && MOOD_PROFILES[state.mood]);
+  const personalPool = new Map();
+  const moodPool = new Map();
 
-  const add = (tracks) => {
+  const addTo = (pool) => (tracks) => {
     for (const t of (tracks ?? [])) {
-      if (t?.id && !state.seenTrackIds.has(t.id) && !candidates.has(t.id) && !isBlacklisted(t)) {
-        candidates.set(t.id, t);
+      if (t?.id && !state.seenTrackIds.has(t.id) && !pool.has(t.id) && !isBlacklisted(t)) {
+        pool.set(t.id, t);
       }
     }
   };
 
-  // Source 1: personal top tracks
+  // Personal tracks — always fetch but cap contribution when mood is active
   await Promise.allSettled([
-    spotifyFetch('/me/top/tracks', { query: { time_range: 'short_term',  limit: 50 } }).then(r => add(r?.items)),
-    spotifyFetch('/me/top/tracks', { query: { time_range: 'medium_term', limit: 50 } }).then(r => add(r?.items)),
+    spotifyFetch('/me/top/tracks', { query: { time_range: 'short_term',  limit: 50 } }).then(r => addTo(personalPool)(r?.items)),
+    spotifyFetch('/me/top/tracks', { query: { time_range: 'medium_term', limit: 50 } }).then(r => addTo(personalPool)(r?.items)),
   ]);
 
-  // Source 2: top artist catalogs via search
-  try {
-    const r = await spotifyFetch('/me/top/artists', { query: { time_range: 'short_term', limit: 15 } });
-    if (r?.items?.length) {
-      await Promise.allSettled(
-        shuffle([...r.items]).slice(0, 3).map(a =>
-          spotifyFetch('/search', { query: { q: `artist:${a.name}`, type: 'track', limit: 10 } }).then(r => add(r?.tracks?.items))
-        )
-      );
-    }
-  } catch (_) {}
+  // Top artist catalogs — skip when mood is active to avoid history dominating
+  if (!moodActive) {
+    try {
+      const r = await spotifyFetch('/me/top/artists', { query: { time_range: 'short_term', limit: 15 } });
+      if (r?.items?.length) {
+        await Promise.allSettled(
+          shuffle([...r.items]).slice(0, 3).map(a =>
+            spotifyFetch('/search', { query: { q: `artist:${a.name}`, type: 'track', limit: 10 } }).then(r => addTo(personalPool)(r?.tracks?.items))
+          )
+        );
+      }
+    } catch (_) {}
+  }
 
-  // Source 3: mood-keyed playlist search
-  if (state.mood && MOOD_PROFILES[state.mood]) {
-    const kws = shuffle([...MOOD_PROFILES[state.mood].keywords]).slice(0, 2);
+  // Mood-keyed playlist search — primary source when mood is active
+  if (moodActive) {
+    const kws = shuffle([...MOOD_PROFILES[state.mood].keywords]).slice(0, 4);
     await Promise.allSettled(kws.map(async (kw) => {
       try {
         const sr = await spotifyFetch('/search', { query: { q: kw, type: 'playlist', limit: 5 } });
@@ -308,18 +315,37 @@ async function discoverTracks(count = 15) {
         const total = pl.tracks?.total ?? 100;
         const offset = Math.max(0, Math.floor(Math.random() * Math.max(1, total - 25)));
         const pr = await spotifyFetch(`/playlists/${pl.id}/items`, { query: { limit: 25, offset } });
-        add((pr?.items ?? []).map(i => i?.track).filter(t => t?.id));
+        addTo(moodPool)((pr?.items ?? []).map(i => i?.track).filter(t => t?.id));
       } catch (_) {}
     }));
   }
 
-  return shuffle([...candidates.values()]).slice(0, count);
+  if (moodActive) {
+    // 80% mood, 20% personal (max 3 personal tracks) to keep some familiarity
+    const moodTracks     = shuffle([...moodPool.values()]);
+    const personalTracks = shuffle([...personalPool.values()]).slice(0, Math.min(3, Math.floor(count * 0.2)));
+    return shuffle([...moodTracks.slice(0, count - personalTracks.length), ...personalTracks]).slice(0, count);
+  }
+
+  return shuffle([...personalPool.values()]).slice(0, count);
 }
 
 // --- Queue Manager ---
 
 const MIN_QUEUE_DEPTH   = 5;
 const QUEUE_REFILL_COUNT = 15;
+
+async function flushQueue() {
+  try {
+    const data = await spotifyFetch('/me/player/queue');
+    const depth = (data?.queue ?? []).length;
+    if (depth === 0) return;
+    await spotifyFetch('/me/player/pause', { method: 'PUT' }).catch(() => {});
+    for (let i = 0; i < depth; i++) {
+      await spotifyFetch('/me/player/next', { method: 'POST' }).catch(() => {});
+    }
+  } catch (_) {}
+}
 
 async function ensureQueueDepth() {
   try {
@@ -552,21 +578,8 @@ server.tool('play',
   async ({ uri, device_id }) => {
     const body = {}; const query = device_id ? { device_id } : {};
     if (uri) { if (uri.includes(':track:')) body.uris = [uri]; else body.context_uri = uri; }
+    if (uri?.includes(':track:')) await flushQueue();
     await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
-    if (uri) {
-      await new Promise(r => setTimeout(r, 1000));
-      if (!uri.includes(':track:')) {
-        await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true } }).catch(() => {});
-      }
-    }
-    let seedId = uri?.includes(':track:') ? uri.split(':').pop() : null;
-    if (!seedId) {
-      try {
-        await new Promise(r => setTimeout(r, 500));
-        const curr = await spotifyFetch('/me/player');
-        if (curr?.item) { seedId = curr.item.id; updateSeeds([curr.item]); }
-      } catch (_) {}
-    }
     setImmediate(() => ensureQueueDepth().catch(() => {}));
     return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed' }] };
   }
