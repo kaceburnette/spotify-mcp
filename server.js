@@ -123,7 +123,7 @@ const MOOD_PROFILES = {
   hype:        { energy: 'high',   keywords: ['confidence boost walk like a badass', 'porter robinson future bass hype', 'polyphia instrumental energy'] },
   workout:     { energy: 'max',    keywords: ['gym phonk aggressive workout', 'workout phonk 2024', 'aggressive gym motivation trap'] },
   pump_up:     { energy: 'high',   keywords: ['pump up phonk motivation', 'high energy rap hype workout', 'aggressive motivation trap phonk'] },
-  chill:       { energy: 'low',    keywords: ['coffeehouse jazz chill beats', 'chillhop relaxed instrumental', 'peaceful piano nils frahm'] },
+  chill:       { energy: 'low',    keywords: ['neo soul smooth r&b late night', 'sonder daniel caesar frank ocean', 'chillhop r&b smooth vibes', 'late night smooth r&b'] },
   relax:       { energy: 'low',    keywords: ['peaceful piano calm ambient', 'max richter olafur arnalds soft', 'ambient relax instrumental mellow'] },
   wind_down:   { energy: 'min',    keywords: ['sleep ambient calm wind down', 'peaceful instrumental sleep', 'soft piano calm'] },
   sad:         { energy: 'low',    keywords: ['sad indie emotional songs', 'heartbreak sad playlist', 'melancholy emotional music'] },
@@ -376,8 +376,8 @@ const VIBE_KEYWORDS = {
   hype:        ['shipped', 'merged', 'launched', 'released', 'done', 'finished', 'deployed', 'just pushed', 'celebrate', 'killed it', 'nailed it', 'closed', 'won'],
   confident:   ['demo', 'pitch', 'presentation', 'client', 'sales', 'investor', 'ceo', 'boss', 'interview', 'call with'],
   creative:    ['design', 'brainstorm', 'idea', 'concept', 'wireframe', 'figma', 'sketch', 'creative', 'exploring', 'thinking through', 'planning'],
-  chill:       ['slow', 'easy', 'casual', 'friday', 'weekend', 'break', 'lunch', 'coffee', 'low stakes', 'light', 'no rush'],
-  night_drive: ['night', 'late', 'midnight', '11pm', '12am', '1am', '2am', '3am', '4am', 'late night', 'after midnight'],
+  chill:       ['slow', 'easy', 'casual', 'friday', 'weekend', 'break', 'lunch', 'coffee', 'low stakes', 'light', 'no rush', 'smooth', 'r&b', 'neo-soul', 'neo soul', 'sonder', 'daniel caesar', 'frank ocean', 'chillhop', 'soul', 'jazzy', 'mellow', 'vibe', 'flowing', 'calm focus', 'calm focused'],
+  night_drive: ['night drive', 'driving at night', 'darksynth', 'cyberpunk', 'synthwave', 'retrowave', 'midnight drive'],
   wind_down:   ['tired', 'exhausted', 'wrapping up', 'calling it', 'done for the day', 'winding down', 'end of day', 'signing off', 'last thing'],
   background:  ['call', 'zoom', 'meeting', 'talking', 'phone', 'on a call', 'standup', 'sync'],
   workout:     ['gym', 'workout', 'run', 'lift', 'training', 'exercise', 'sets', 'reps', 'running'],
@@ -416,7 +416,7 @@ function detectMood(context) {
   }
 
   // Time-of-day boosts
-  if (hour >= 22 || hour < 5)  { scores.night_drive += 2; scores.lock_in  += 1; }
+  if (hour >= 22 || hour < 5)  { scores.wind_down   += 1; scores.lock_in  += 1; }
   if (hour >= 5  && hour < 10) { scores.grind       += 1; scores.confident += 1; }
   if (hour >= 14 && hour < 17) { scores.chill       += 1; }
 
