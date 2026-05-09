@@ -2,7 +2,7 @@
 
 Tell Claude your vibe. It plays the music.
 
-32 tools. Full playback control. Mood detection. Personal track queuing. Built for Claude Code.
+47 tools. Auto vibe detection, smart queue management, DJ set builder, sleep timer, audiobooks & podcasts. Built for Claude Code.
 
 ---
 
@@ -117,31 +117,62 @@ Add this to your `~/.claude/CLAUDE.md`:
 
 ## All tools
 
+### Mood & Vibe
 | Tool | What it does |
 |---|---|
 | `detect_vibe` | Read session context → pick mood → queue tracks → play |
 | `set_mood` | Manually set mood by name |
 | `get_mood` | Current mood, queue depth, session stats |
+| `identify_track_vibe` | Get track metadata (artist, genres, era) so Claude can mood-match it |
 | `clear_session` | Reset seen tracks, start fresh |
-| `get_prefs` | View preferences |
-| `update_prefs` | Change startup song, mood, blacklists |
+
+### DJ Sets & Playlists
+| Tool | What it does |
+|---|---|
+| `build_set` | Curate a single playlist from a track list (Claude picks tracks, this saves them) |
+| `build_arc` | Multi-mood playlist with energy progression (chill → focus → grind) |
+| `create_playlist` | Make a new playlist |
+| `add_to_playlist` | Add tracks to a playlist |
+| `remove_from_playlist` | Remove specific tracks |
+| `clear_playlist` | Remove all tracks (keeps playlist) |
+| `delete_playlist` | Delete the playlist entirely |
+| `get_playlists` | Your playlists |
+| `get_playlist_tracks` | Tracks in a playlist |
+
+### Playback
+| Tool | What it does |
+|---|---|
 | `play` | Play/resume. Pass a URI or leave empty to resume |
 | `pause` | Pause |
-| `next_track` | Skip. Auto-refills queue |
+| `next_track` | Skip. Tracks skipped under 30s twice get auto-blacklisted |
 | `previous_track` | Go back |
 | `set_volume` | 0–100 |
+| `fade_volume` | Smooth volume transition over N seconds |
 | `toggle_shuffle` | On/off |
 | `set_repeat` | off / track / context |
 | `seek` | Jump to position in seconds |
 | `get_current_track` | What's playing |
 | `get_queue` | What's coming up |
+| `add_to_queue` | Queue a specific track |
+| `queue_many` | Queue up to 100 tracks in one call |
+
+### Sleep Timer
+| Tool | What it does |
+|---|---|
+| `set_sleep_timer` | Auto-pause after N minutes (off by default) |
+| `cancel_sleep_timer` | Cancel pending timer |
+| `get_sleep_timer` | Check time remaining |
+
+### Devices
+| Tool | What it does |
+|---|---|
 | `get_devices` | Available playback devices |
 | `transfer_playback` | Switch device |
-| `search` | Search tracks, artists, albums, playlists |
-| `get_playlists` | Your playlists |
-| `get_playlist_tracks` | Tracks in a playlist |
-| `create_playlist` | Make a new playlist |
-| `add_to_playlist` | Add tracks to a playlist |
+
+### Search & Library
+| Tool | What it does |
+|---|---|
+| `search` | Search tracks, artists, albums, playlists. Optional `year_min`/`year_max` filter |
 | `get_saved_tracks` | Liked songs |
 | `save_track` | Like a track |
 | `remove_saved_track` | Unlike a track |
@@ -150,7 +181,20 @@ Add this to your `~/.claude/CLAUDE.md`:
 | `get_recently_played` | Recent history |
 | `get_artist` | Artist info + top tracks + albums |
 | `get_album` | Album details + tracklist |
-| `add_to_queue` | Queue a specific track |
+
+### Audiobooks & Podcasts
+| Tool | What it does |
+|---|---|
+| `search_audiobook` | Find audiobooks by title or author |
+| `get_audiobook` | Details + chapter list |
+| `search_podcast` | Find podcasts by name |
+| `get_podcast_episodes` | Recent episodes for a show |
+
+### Prefs
+| Tool | What it does |
+|---|---|
+| `get_prefs` | View preferences |
+| `update_prefs` | Change startup song, mood, blacklists, custom moods |
 
 ---
 
