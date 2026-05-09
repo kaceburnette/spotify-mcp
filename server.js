@@ -334,14 +334,20 @@ const MIN_QUEUE_DEPTH   = 5;
 const QUEUE_REFILL_COUNT = 15;
 
 async function flushQueue() {
+  // Spotify's GET /queue caps at ~20 returned tracks even if more are queued.
+  // Loop: skip a batch, recheck depth, repeat until empty (capped at 50 total skips).
   try {
-    const data = await spotifyFetch('/me/player/queue');
-    const depth = (data?.queue ?? []).length;
-    if (depth === 0) return;
-    // Skip while playing — pause prevented queue drain, rapid skips while playing works
-    for (let i = 0; i < depth; i++) {
-      await spotifyFetch('/me/player/next', { method: 'POST' }).catch(() => {});
-      await new Promise(r => setTimeout(r, 150));
+    let totalSkipped = 0;
+    while (totalSkipped < 50) {
+      const data = await spotifyFetch('/me/player/queue');
+      const depth = (data?.queue ?? []).length;
+      if (depth === 0) return;
+      const batch = Math.min(depth, 10);
+      for (let i = 0; i < batch; i++) {
+        await spotifyFetch('/me/player/next', { method: 'POST' }).catch(() => {});
+        await new Promise(r => setTimeout(r, 200));
+        totalSkipped++;
+      }
     }
   } catch (_) {}
 }
