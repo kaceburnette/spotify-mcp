@@ -2,7 +2,7 @@
 
 Tell Claude your vibe. It plays the music.
 
-47 tools. Auto vibe detection, smart queue management, DJ set builder, sleep timer, audiobooks & podcasts. Built for Claude Code.
+48 tools. Auto vibe detection, cold-start auto-launch, smart queue management, DJ set builder, sleep timer, audiobooks & podcasts. Built for Claude Code.
 
 ---
 
@@ -168,6 +168,7 @@ Add this to your `~/.claude/CLAUDE.md`:
 |---|---|
 | `get_devices` | Available playback devices |
 | `transfer_playback` | Switch device |
+| `wake_spotify` | Launch the Spotify app locally if it isn't running (auto-fires on cold start) |
 
 ### Search & Library
 | Tool | What it does |
