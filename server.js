@@ -499,7 +499,7 @@ async function journalPreviousSession(previousMood, sessionStart) {
 // --- MCP Server ---
 
 function createServer() {
-  const server = new McpServer({ name: 'spotify', version: '3.2.0' });
+  const server = new McpServer({ name: 'spotify', version: '3.3.0' });
 
 // ── Mood ─────────────────────────────────────────────────────────────────────
 
@@ -692,6 +692,47 @@ server.tool('set_repeat',   'Set repeat mode.',          { mode: z.enum(['off', 
 server.tool('seek',         'Seek to position in seconds.',{ position_seconds: z.number().min(0) }, async ({ position_seconds }) => { await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: Math.round(position_seconds * 1000) } }); return { content: [{ type: 'text', text: `Seeked to ${fmtMs(position_seconds * 1000)}` }] }; });
 server.tool('add_to_queue', 'Add a track URI to the queue.', { uri: z.string() }, async ({ uri }) => { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri } }); return { content: [{ type: 'text', text: `Queued: ${uri}` }] }; });
 
+server.tool('queue_many',
+  'Add multiple track URIs to the queue in order. Use this instead of calling add_to_queue in a loop — one tool call queues the whole set.',
+  { uris: z.array(z.string()).min(1).max(100).describe('Track URIs in playback order') },
+  async ({ uris }) => {
+    let added = 0;
+    const failed = [];
+    for (const uri of uris) {
+      try {
+        await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri } });
+        added++;
+      } catch (err) { failed.push({ uri, error: err.message }); }
+    }
+    return { content: [{ type: 'text', text: JSON.stringify({ queued: added, failed: failed.length, errors: failed.slice(0, 3) }, null, 2) }] };
+  }
+);
+
+server.tool('fade_volume',
+  'Gradually fade volume from current to target over N seconds. Returns immediately; fade runs in background.',
+  {
+    target_volume:    z.number().min(0).max(100).describe('Target volume percentage'),
+    duration_seconds: z.number().min(1).max(300).default(10).describe('Fade duration in seconds (1-300)'),
+  },
+  async ({ target_volume, duration_seconds }) => {
+    setImmediate(async () => {
+      try {
+        const playback = await spotifyFetch('/me/player');
+        const current = playback?.device?.volume_percent ?? 50;
+        const steps = Math.max(5, Math.min(60, duration_seconds * 2));
+        const intervalMs = (duration_seconds * 1000) / steps;
+        const delta = (target_volume - current) / steps;
+        for (let i = 1; i <= steps; i++) {
+          const v = Math.round(Math.max(0, Math.min(100, current + delta * i)));
+          await spotifyFetch('/me/player/volume', { method: 'PUT', query: { volume_percent: v } }).catch(() => {});
+          await new Promise(r => setTimeout(r, intervalMs));
+        }
+      } catch (_) {}
+    });
+    return { content: [{ type: 'text', text: `Fading to ${target_volume}% over ${duration_seconds}s` }] };
+  }
+);
+
 server.tool('get_queue', 'Get the current playback queue.', {}, async () => {
   const data = await spotifyFetch('/me/player/queue');
   return { content: [{ type: 'text', text: JSON.stringify({ now: fmtTrackSlim(data?.currently_playing), queue: (data?.queue ?? []).slice(0, 10).map(fmtTrackSlim) }) }] };
@@ -752,6 +793,36 @@ server.tool('add_to_playlist', 'Add track URIs to a playlist.', { playlist_id: z
   await spotifyFetch(`/playlists/${id}/items`, { method: 'POST', body: { uris } });
   return { content: [{ type: 'text', text: `Added ${uris.length} track(s)` }] };
 });
+
+server.tool('remove_from_playlist',
+  'Remove specific track URIs from a playlist.',
+  { playlist_id: z.string(), uris: z.array(z.string()).min(1).max(100) },
+  async ({ playlist_id, uris }) => {
+    const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
+    await spotifyFetch(`/playlists/${id}/tracks`, { method: 'DELETE', body: { tracks: uris.map(u => ({ uri: u })) } });
+    return { content: [{ type: 'text', text: `Removed ${uris.length} track(s)` }] };
+  }
+);
+
+server.tool('clear_playlist',
+  'Remove ALL tracks from a playlist (keeps the playlist itself).',
+  { playlist_id: z.string() },
+  async ({ playlist_id }) => {
+    const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
+    await spotifyFetch(`/playlists/${id}/tracks`, { method: 'PUT', body: { uris: [] } });
+    return { content: [{ type: 'text', text: 'Playlist cleared' }] };
+  }
+);
+
+server.tool('delete_playlist',
+  'Delete a playlist (Spotify API quirk: this unfollows your own playlist, which removes it from your library).',
+  { playlist_id: z.string() },
+  async ({ playlist_id }) => {
+    const id = playlist_id.includes(':') ? playlist_id.split(':').pop() : playlist_id;
+    await spotifyFetch(`/playlists/${id}/followers`, { method: 'DELETE' });
+    return { content: [{ type: 'text', text: 'Playlist deleted' }] };
+  }
+);
 
 server.tool('build_set',
   'Curate a DJ set: creates a playlist with the given tracks in order. Use for "build me a 90-min Hi Ibiza set" type requests — Claude picks the tracks (energy progression, era, scene), this saves them as a single playlist the user can play with Smart Shuffle.',
@@ -888,6 +959,73 @@ server.tool('get_artist', 'Get artist details and recent albums.', { artist_id: 
   ]);
   return { content: [{ type: 'text', text: JSON.stringify({ name: artist.name, genres: artist.genres, followers: artist.followers?.total, popularity: artist.popularity, uri: artist.uri, top_tracks: (tracks?.tracks?.items ?? []).map(fmtTrack), recent_albums: (albums?.items ?? []).map(a => ({ name: a.name, release_date: a.release_date, total_tracks: a.total_tracks, uri: a.uri })) }, null, 2) }] };
 });
+
+server.tool('search_audiobook',
+  'Search audiobooks by title or author. Returns audiobook URIs that can be played with the play tool.',
+  { query: z.string(), limit: z.number().min(1).max(20).default(10) },
+  async ({ query, limit }) => {
+    const data = await spotifyFetch('/search', { query: { q: query, type: 'audiobook', limit } });
+    const items = (data?.audiobooks?.items ?? []).map(a => ({
+      name:    a.name,
+      authors: a.authors?.map(x => x.name).join(', '),
+      narrators: a.narrators?.map(x => x.name).join(', '),
+      total_chapters: a.total_chapters,
+      uri:     a.uri,
+    }));
+    return { content: [{ type: 'text', text: JSON.stringify(items, null, 2) }] };
+  }
+);
+
+server.tool('get_audiobook',
+  'Get audiobook details and chapter list.',
+  { audiobook_id: z.string() },
+  async ({ audiobook_id }) => {
+    const id = audiobook_id.includes(':') ? audiobook_id.split(':').pop() : audiobook_id;
+    const data = await spotifyFetch(`/audiobooks/${id}`);
+    return { content: [{ type: 'text', text: JSON.stringify({
+      name:      data.name,
+      authors:   data.authors?.map(a => a.name).join(', '),
+      narrators: data.narrators?.map(n => n.name).join(', '),
+      description: data.description,
+      total_chapters: data.total_chapters,
+      uri: data.uri,
+      chapters: (data.chapters?.items ?? []).map(c => ({ name: c.name, number: c.chapter_number, duration: fmtMs(c.duration_ms), uri: c.uri })),
+    }, null, 2) }] };
+  }
+);
+
+server.tool('search_podcast',
+  'Search podcasts by name. Returns show URIs that can be played with the play tool.',
+  { query: z.string(), limit: z.number().min(1).max(20).default(10) },
+  async ({ query, limit }) => {
+    const data = await spotifyFetch('/search', { query: { q: query, type: 'show', limit } });
+    const items = (data?.shows?.items ?? []).map(s => ({
+      name:      s.name,
+      publisher: s.publisher,
+      description: s.description?.slice(0, 200),
+      total_episodes: s.total_episodes,
+      uri: s.uri,
+    }));
+    return { content: [{ type: 'text', text: JSON.stringify(items, null, 2) }] };
+  }
+);
+
+server.tool('get_podcast_episodes',
+  'Get the most recent episodes of a podcast.',
+  { show_id: z.string(), limit: z.number().min(1).max(50).default(20) },
+  async ({ show_id, limit }) => {
+    const id = show_id.includes(':') ? show_id.split(':').pop() : show_id;
+    const data = await spotifyFetch(`/shows/${id}/episodes`, { query: { limit } });
+    const items = (data?.items ?? []).map(e => ({
+      name: e.name,
+      release_date: e.release_date,
+      duration: fmtMs(e.duration_ms),
+      description: e.description?.slice(0, 200),
+      uri: e.uri,
+    }));
+    return { content: [{ type: 'text', text: JSON.stringify(items, null, 2) }] };
+  }
+);
 
 server.tool('get_album', 'Get album details and track list.', { album_id: z.string() }, async ({ album_id }) => {
   const id   = album_id.includes(':') ? album_id.split(':').pop() : album_id;
