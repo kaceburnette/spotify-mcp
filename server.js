@@ -215,6 +215,9 @@ async function playMood(mood) {
   }
   if (!firstTrack) return null;
 
+  // Flush old queue first so garbage doesn't leak through
+  await flushQueue();
+
   // Play the mood-matched opener
   try {
     await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [firstTrack.uri] }, query });
@@ -335,9 +338,10 @@ async function flushQueue() {
     const data = await spotifyFetch('/me/player/queue');
     const depth = (data?.queue ?? []).length;
     if (depth === 0) return;
-    await spotifyFetch('/me/player/pause', { method: 'PUT' }).catch(() => {});
+    // Skip while playing — pause prevented queue drain, rapid skips while playing works
     for (let i = 0; i < depth; i++) {
       await spotifyFetch('/me/player/next', { method: 'POST' }).catch(() => {});
+      await new Promise(r => setTimeout(r, 150));
     }
   } catch (_) {}
 }
@@ -573,6 +577,7 @@ server.tool('play',
   async ({ uri, device_id }) => {
     const body = {}; const query = device_id ? { device_id } : {};
     if (uri) { if (uri.includes(':track:')) body.uris = [uri]; else body.context_uri = uri; }
+    if (uri?.includes(':track:')) await flushQueue();
     await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
     setImmediate(() => ensureQueueDepth().catch(() => {}));
     return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed' }] };
