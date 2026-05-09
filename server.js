@@ -5,6 +5,7 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
 const { randomUUID } = require('crypto');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -195,11 +196,40 @@ async function activateDevice() {
   return device.id;
 }
 
+// Try to launch the Spotify app locally and wait for it to register as a device.
+// Mac: `open -a Spotify`. Windows: `start spotify:`. Linux: `xdg-open spotify:`.
+// Returns the device id if successful, null otherwise.
+async function wakeSpotify({ timeoutMs = 12000 } = {}) {
+  // Already have a device? Just activate it.
+  const existing = await activateDevice().catch(() => null);
+  if (existing) return existing;
+
+  // Try to launch the app locally
+  try {
+    if (process.platform === 'darwin') {
+      spawn('open', ['-a', 'Spotify'], { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'win32') {
+      spawn('cmd', ['/c', 'start', 'spotify:'], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn('xdg-open', ['spotify:'], { detached: true, stdio: 'ignore' }).unref();
+    }
+  } catch (_) {}
+
+  // Poll for a device to appear
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1500));
+    const id = await activateDevice().catch(() => null);
+    if (id) return id;
+  }
+  return null;
+}
+
 async function playMood(mood) {
   const profile = MOOD_PROFILES[mood];
   if (!profile) return null;
 
-  const deviceId = await activateDevice();
+  const deviceId = (await activateDevice()) ?? (await wakeSpotify());
   const query = deviceId ? { device_id: deviceId } : {};
 
   // First track: always mood-matched from playlist search (not personal history)
@@ -499,7 +529,7 @@ async function journalPreviousSession(previousMood, sessionStart) {
 // --- MCP Server ---
 
 function createServer() {
-  const server = new McpServer({ name: 'spotify', version: '3.3.0' });
+  const server = new McpServer({ name: 'spotify', version: '3.4.0' });
 
 // ── Mood ─────────────────────────────────────────────────────────────────────
 
@@ -631,7 +661,19 @@ server.tool('play',
     const body = {}; const query = device_id ? { device_id } : {};
     if (uri) { if (uri.includes(':track:')) body.uris = [uri]; else body.context_uri = uri; }
     if (uri?.includes(':track:')) await flushQueue();
-    await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
+    try {
+      await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
+    } catch (err) {
+      // Auto-wake Spotify on no active device, then retry once
+      if (err?.message?.includes('NO_ACTIVE_DEVICE') || err?.message?.includes('404')) {
+        const woken = await wakeSpotify();
+        if (woken) {
+          await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query: { ...query, device_id: woken } });
+        } else {
+          throw new Error('No active Spotify device. Open the Spotify app on any device and play anything for a second to register it.');
+        }
+      } else throw err;
+    }
     setImmediate(() => ensureQueueDepth().catch(() => {}));
     return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed' }] };
   }
@@ -747,6 +789,16 @@ server.tool('transfer_playback', 'Transfer playback to a device.', { device_id: 
   await spotifyFetch('/me/player', { method: 'PUT', body: { device_ids: [device_id] } });
   return { content: [{ type: 'text', text: `Transferred to ${device_id}` }] };
 });
+
+server.tool('wake_spotify',
+  'Launch the Spotify app on the local machine if no device is registered. Mac/Windows/Linux desktop only — does nothing useful when the MCP runs on a different machine. Used automatically by play and detect_vibe on cold start.',
+  {},
+  async () => {
+    const id = await wakeSpotify();
+    if (id) return { content: [{ type: 'text', text: JSON.stringify({ status: 'ready', device_id: id }, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({ status: 'no_device', hint: 'Open Spotify manually and play any track briefly.' }, null, 2) }] };
+  }
+);
 
 // ── Search + Library ──────────────────────────────────────────────────────────
 
