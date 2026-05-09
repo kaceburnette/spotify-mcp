@@ -2,7 +2,9 @@
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
+const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -188,7 +190,6 @@ async function activateDevice() {
   const device = list.find(d => d.is_active) ?? list[0];
   if (!device.is_active) {
     await spotifyFetch('/me/player', { method: 'PUT', body: { device_ids: [device.id], play: true } });
-    await new Promise(r => setTimeout(r, 1000));
   }
   return device.id;
 }
@@ -196,30 +197,47 @@ async function activateDevice() {
 async function playMood(mood) {
   const profile = MOOD_PROFILES[mood];
   if (!profile) return null;
-  const keyword = profile.keywords[Math.floor(Math.random() * profile.keywords.length)];
-  const sr = await spotifyFetch('/search', { query: { q: keyword, type: 'playlist', limit: 8 } });
-  const lists = (sr?.playlists?.items ?? []).filter(p => p?.uri);
-  if (!lists.length) return null;
-  const pick = lists[Math.floor(Math.random() * Math.min(lists.length, 4))];
 
   const deviceId = await activateDevice();
   const query = deviceId ? { device_id: deviceId } : {};
 
+  // First track: always mood-matched from playlist search (not personal history)
+  const keyword = profile.keywords[Math.floor(Math.random() * profile.keywords.length)];
+  const sr = await spotifyFetch('/search', { query: { q: keyword, type: 'playlist', limit: 5 } });
+  const playlists = (sr?.playlists?.items ?? []).filter(p => p?.id);
+  let firstTrack = null;
+  if (playlists.length) {
+    const pl = playlists[Math.floor(Math.random() * Math.min(playlists.length, 3))];
+    const offset = Math.floor(Math.random() * 30);
+    const pr = await spotifyFetch(`/playlists/${pl.id}/items`, { query: { limit: 20, offset } });
+    const candidates = (pr?.items ?? []).map(i => i?.track).filter(t => t?.id && !isBlacklisted(t));
+    if (candidates.length) firstTrack = candidates[Math.floor(Math.random() * candidates.length)];
+  }
+  if (!firstTrack) return null;
+
+  // Play the mood-matched opener
   try {
-    await spotifyFetch('/me/player/play', { method: 'PUT', body: { context_uri: pick.uri }, query });
+    await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [firstTrack.uri] }, query });
   } catch (err) {
-    // If still no active device, bail with a clear message
     if (err?.message?.includes('NO_ACTIVE_DEVICE') || err?.message?.includes('404')) {
       throw new Error('No active Spotify device found. Open the Spotify app on any device and try again.');
     }
     throw err;
   }
 
-  await new Promise(r => setTimeout(r, 800));
-  await spotifyFetch('/me/player/shuffle', { method: 'PUT', query: { state: true, ...(deviceId ? { device_id: deviceId } : {}) } }).catch(() => {});
-  setImmediate(() => ensureQueueDepth().catch(() => {}));
-  const current = await spotifyFetch('/me/player');
-  return { playlist: pick.name, now_playing: current?.item ? { name: current.item.name, artist: current.item.artists?.map(a => a.name).join(', ') } : null };
+  // Fill queue with personal + mood tracks in background
+  setImmediate(async () => {
+    const tracks = await discoverTracks(20);
+    for (const track of tracks) {
+      await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: track.uri } }).catch(() => {});
+    }
+    updateSeeds([firstTrack, ...tracks]);
+    await ensureQueueDepth().catch(() => {});
+  });
+
+  return {
+    now_playing: { name: firstTrack.name, artist: firstTrack.artists?.map(a => a.name).join(', ') }
+  };
 }
 
 // --- Discovery Engine ---
@@ -410,7 +428,8 @@ function fmtPlayback(s) {
 
 // --- MCP Server ---
 
-const server = new McpServer({ name: 'spotify', version: '3.1.0' });
+function createServer() {
+  const server = new McpServer({ name: 'spotify', version: '3.1.0' });
 
 // ── Mood ─────────────────────────────────────────────────────────────────────
 
@@ -548,8 +567,8 @@ server.tool('play',
         if (curr?.item) { seedId = curr.item.id; updateSeeds([curr.item]); }
       } catch (_) {}
     }
-    const qr = await ensureQueueDepth();
-    return { content: [{ type: 'text', text: (uri ? `Playing: ${uri}` : 'Resumed') + (qr.refilled ? ` (+${qr.added} tracks queued)` : '') }] };
+    setImmediate(() => ensureQueueDepth().catch(() => {}));
+    return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed' }] };
   }
 );
 
@@ -569,9 +588,8 @@ server.tool('next_track', 'Skip to next track. Auto-refills queue if running low
     if (result?.item?.id && result.item.id !== beforeId) break;
   }
   if (result?.item) updateSeeds([result.item]);
-  const qr  = await ensureQueueDepth();
+  setImmediate(() => ensureQueueDepth().catch(() => {}));
   const out = fmtPlayback(result);
-  if (qr.refilled) out.queue_refilled = qr.added;
   return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
 });
 
@@ -678,15 +696,88 @@ server.tool('get_album', 'Get album details and track list.', { album_id: z.stri
 
 // ══════════════════════════════════════════════════════════════════════════════
 
+  return server;
+}
+
 async function main() {
-  // If a startup song is set, queue it up as the first thing that plays
   if (prefs.startup_song) {
     try { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri: prefs.startup_song } }); } catch (_) {}
   }
 
+  const useHttp = process.argv.includes('--http') || process.env.PORT;
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  if (useHttp) {
+    const portArg = process.argv[process.argv.indexOf('--http') + 1];
+    const preferredPort = Number(process.env.PORT || (portArg && !portArg.startsWith('-') ? portArg : null) || 3000);
+    const net = require('net');
+    const port = await new Promise((resolve) => {
+      const tryPort = (p) => {
+        const s = net.createServer();
+        s.once('error', () => tryPort(p + 1));
+        s.once('listening', () => { s.close(); resolve(p); });
+        s.listen(p);
+      };
+      tryPort(preferredPort);
+    });
+    const express = require('express');
+    const app = express();
+    app.use(express.json());
+
+    app.use((req, res, next) => {
+      console.error(`${req.method} ${req.path} | headers: ${JSON.stringify(req.headers)}`);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id, Authorization');
+      if (req.method === 'OPTIONS') return res.sendStatus(200);
+      next();
+    });
+
+    const sessions = new Map();
+
+    app.post('/mcp', async (req, res) => {
+      try {
+        const existingId = req.headers['mcp-session-id'];
+        if (existingId && sessions.has(existingId)) {
+          await sessions.get(existingId).handleRequest(req, res, req.body);
+          return;
+        }
+        const mcpServer = createServer();
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => {
+            const id = randomUUID();
+            sessions.set(id, transport);
+            return id;
+          },
+        });
+        transport.onclose = () => { if (transport.sessionId) sessions.delete(transport.sessionId); };
+        await mcpServer.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch (err) {
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.get('/mcp', async (req, res) => {
+      const sessionId = req.headers['mcp-session-id'];
+      if (!sessionId || !sessions.has(sessionId)) return res.status(404).json({ error: 'Session not found' });
+      await sessions.get(sessionId).handleRequest(req, res);
+    });
+
+    app.delete('/mcp', async (req, res) => {
+      const sessionId = req.headers['mcp-session-id'];
+      if (sessionId && sessions.has(sessionId)) {
+        await sessions.get(sessionId).close();
+        sessions.delete(sessionId);
+      }
+      res.sendStatus(200);
+    });
+
+    app.listen(port, () => console.error(`Spotify MCP HTTP server running on http://localhost:${port}/mcp`));
+  } else {
+    const server = createServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }
 
 main().catch(err => { console.error('Server error:', err); process.exit(1); });
