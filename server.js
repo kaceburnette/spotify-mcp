@@ -215,9 +215,6 @@ async function playMood(mood) {
   }
   if (!firstTrack) return null;
 
-  // Flush old queue before playing so garbage doesn't leak through
-  await flushQueue();
-
   // Play the mood-matched opener
   try {
     await spotifyFetch('/me/player/play', { method: 'PUT', body: { uris: [firstTrack.uri] }, query });
@@ -321,10 +318,8 @@ async function discoverTracks(count = 15) {
   }
 
   if (moodActive) {
-    // 80% mood, 20% personal (max 3 personal tracks) to keep some familiarity
-    const moodTracks     = shuffle([...moodPool.values()]);
-    const personalTracks = shuffle([...personalPool.values()]).slice(0, Math.min(3, Math.floor(count * 0.2)));
-    return shuffle([...moodTracks.slice(0, count - personalTracks.length), ...personalTracks]).slice(0, count);
+    // Mood is active: pure mood-matched tracks, no personal history
+    return shuffle([...moodPool.values()]).slice(0, count);
   }
 
   return shuffle([...personalPool.values()]).slice(0, count);
@@ -578,7 +573,6 @@ server.tool('play',
   async ({ uri, device_id }) => {
     const body = {}; const query = device_id ? { device_id } : {};
     if (uri) { if (uri.includes(':track:')) body.uris = [uri]; else body.context_uri = uri; }
-    if (uri?.includes(':track:')) await flushQueue();
     await spotifyFetch('/me/player/play', { method: 'PUT', body: Object.keys(body).length ? body : undefined, query });
     setImmediate(() => ensureQueueDepth().catch(() => {}));
     return { content: [{ type: 'text', text: uri ? `Playing: ${uri}` : 'Resumed' }] };
