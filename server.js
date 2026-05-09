@@ -787,4 +787,15 @@ async function main() {
   }
 }
 
+// Background queue watcher — refills automatically as tracks play
+setInterval(async () => {
+  try {
+    const playback = await spotifyFetch('/me/player');
+    if (!playback?.is_playing) return;
+    const data = await spotifyFetch('/me/player/queue');
+    const depth = (data?.queue ?? []).length;
+    if (depth < MIN_QUEUE_DEPTH) await ensureQueueDepth();
+  } catch (_) {}
+}, 30000);
+
 main().catch(err => { console.error('Server error:', err); process.exit(1); });
