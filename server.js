@@ -149,7 +149,7 @@ for (const [name, def] of Object.entries(prefs.custom_moods || {})) {
 
 // --- Persistent State ---
 
-const DEFAULT_STATE = { mood: null, moodSetAt: null, seedTrackIds: [], seedArtistIds: [], seenTrackIds: [], tracksQueued: 0 };
+const DEFAULT_STATE = { mood: null, moodSetAt: null, seedTrackIds: [], seedArtistIds: [], seenTrackIds: [], tracksQueued: 0, skipCounts: {} };
 
 function loadState() {
   if (!fs.existsSync(STATE_PATH)) return { ...DEFAULT_STATE };
@@ -171,6 +171,7 @@ function saveState() {
     mood: state.mood, moodSetAt: state.moodSetAt,
     seedTrackIds: state.seedTrackIds.slice(-20), seedArtistIds: state.seedArtistIds.slice(-20),
     seenTrackIds: [...state.seenTrackIds].slice(-500), tracksQueued: state.tracksQueued,
+    skipCounts: state.skipCounts,
   }, null, 2));
 }
 
@@ -600,9 +601,23 @@ server.tool('pause', 'Pause playback.', {}, async () => {
   return { content: [{ type: 'text', text: 'Paused' }] };
 });
 
-server.tool('next_track', 'Skip to next track. Auto-refills queue if running low.', {}, async () => {
+server.tool('next_track', 'Skip to next track. Auto-refills queue if running low. Tracks skipped within 30s twice get auto-blacklisted.', {}, async () => {
   const before = await spotifyFetch('/me/player');
   const beforeId = before?.item?.id;
+  const beforeProgress = before?.progress_ms ?? 0;
+  const beforeDuration = before?.item?.duration_ms ?? Infinity;
+
+  // Skip learning: if track was skipped within 30s OR before 25% played, count as a skip
+  const isEarlySkip = beforeId && (beforeProgress < 30000 || (beforeProgress / beforeDuration) < 0.25);
+  if (isEarlySkip) {
+    state.skipCounts[beforeId] = (state.skipCounts[beforeId] ?? 0) + 1;
+    if (state.skipCounts[beforeId] >= 2 && !prefs.blacklist_tracks.includes(beforeId)) {
+      prefs.blacklist_tracks = [...prefs.blacklist_tracks, beforeId];
+      savePrefs();
+    }
+    saveState();
+  }
+
   await spotifyFetch('/me/player/next', { method: 'POST' });
   let result;
   for (let i = 0; i < 5; i++) {
@@ -653,10 +668,20 @@ server.tool('transfer_playback', 'Transfer playback to a device.', { device_id: 
 
 // ── Search + Library ──────────────────────────────────────────────────────────
 
-server.tool('search', 'Search tracks, artists, albums, or playlists.', {
-  query: z.string(), type: z.enum(['track', 'artist', 'album', 'playlist']).default('track'), limit: z.number().min(1).max(10).default(10),
-}, async ({ query, type, limit }) => {
-  const data = await spotifyFetch('/search', { query: { q: query, type, limit } });
+server.tool('search', 'Search tracks, artists, albums, or playlists. Optional year_min/year_max filters by release year (e.g. 2023-2024).', {
+  query: z.string(),
+  type: z.enum(['track', 'artist', 'album', 'playlist']).default('track'),
+  limit: z.number().min(1).max(10).default(10),
+  year_min: z.number().optional().describe('Earliest release year, e.g. 2023'),
+  year_max: z.number().optional().describe('Latest release year, e.g. 2024'),
+}, async ({ query, type, limit, year_min, year_max }) => {
+  let q = query;
+  if (year_min || year_max) {
+    const lo = year_min || 0;
+    const hi = year_max || new Date().getFullYear();
+    q += ` year:${lo}-${hi}`;
+  }
+  const data = await spotifyFetch('/search', { query: { q, type, limit } });
   let items = [];
   if (type === 'track')    items = (data?.tracks?.items    ?? []).map(fmtTrackSlim);
   else if (type === 'artist')   items = (data?.artists?.items  ?? []).map(a => ({ name: a.name, uri: a.uri }));
@@ -686,6 +711,25 @@ server.tool('add_to_playlist', 'Add track URIs to a playlist.', { playlist_id: z
   await spotifyFetch(`/playlists/${id}/items`, { method: 'POST', body: { uris } });
   return { content: [{ type: 'text', text: `Added ${uris.length} track(s)` }] };
 });
+
+server.tool('build_set',
+  'Curate a DJ set: creates a playlist with the given tracks in order. Use for "build me a 90-min Hi Ibiza set" type requests — Claude picks the tracks (energy progression, era, scene), this saves them as a single playlist the user can play with Smart Shuffle.',
+  {
+    name:        z.string().describe('Playlist name, e.g. "Hi Ibiza 4am 2024"'),
+    uris:        z.array(z.string()).describe('Track URIs in playback order — sequence them by energy curve (warmup → peak → wind-down)'),
+    description: z.string().optional().describe('Optional set notes (vibe, era, occasion)'),
+    public:      z.boolean().default(false),
+  },
+  async ({ name, uris, description, public: pub }) => {
+    const data = await spotifyFetch('/me/playlists', { method: 'POST', body: { name, description: description ?? '', public: pub } });
+    const id = data.uri.split(':').pop();
+    // Spotify limits add to 100 URIs per call — chunk if needed
+    for (let i = 0; i < uris.length; i += 100) {
+      await spotifyFetch(`/playlists/${id}/items`, { method: 'POST', body: { uris: uris.slice(i, i + 100) } });
+    }
+    return { content: [{ type: 'text', text: JSON.stringify({ name: data.name, uri: data.uri, url: data.external_urls?.spotify, tracks: uris.length }, null, 2) }] };
+  }
+);
 
 server.tool('get_saved_tracks', 'Get liked/saved tracks.', { limit: z.number().min(1).max(50).default(20), offset: z.number().min(0).default(0) }, async ({ limit, offset }) => {
   const data = await spotifyFetch('/me/tracks', { query: { limit, offset } });
