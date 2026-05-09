@@ -140,11 +140,11 @@ for (const [mood, overrides] of Object.entries(prefs.mood_overrides || {})) {
   if (MOOD_PROFILES[mood]) Object.assign(MOOD_PROFILES[mood], overrides);
 }
 
-// Merge user-defined custom moods into MOOD_PROFILES and VIBE_KEYWORDS
+// Merge custom moods into MOOD_PROFILES only here — VIBE_KEYWORDS not yet defined
+// Triggers are merged after VIBE_KEYWORDS is initialized (see below)
 for (const [name, def] of Object.entries(prefs.custom_moods || {})) {
   if (!def?.keywords?.length) continue;
   MOOD_PROFILES[name] = { energy: def.energy || 'medium', keywords: def.keywords };
-  if (def.triggers?.length) VIBE_KEYWORDS[name] = def.triggers;
 }
 
 // --- Persistent State ---
@@ -391,6 +391,11 @@ const VIBE_KEYWORDS = {
   in_my_feels: ['in my feels', 'emotional', 'reflecting', 'thinking about', 'missing', 'nostalgic', 'overthinking'],
   angry:       ['angry', 'pissed', 'frustrated', 'annoyed', 'over it', 'done with', 'rage', 'mad'],
 };
+
+// Now merge custom mood triggers into VIBE_KEYWORDS (safe — VIBE_KEYWORDS is now defined)
+for (const [name, def] of Object.entries(prefs.custom_moods || {})) {
+  if (def?.triggers?.length) VIBE_KEYWORDS[name] = def.triggers;
+}
 
 // Explicit mood name mentions get a big score boost — "I want focus vibes" → focus wins
 const EXPLICIT_MOOD_TRIGGERS = {
