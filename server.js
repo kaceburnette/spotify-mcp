@@ -886,7 +886,7 @@ server.tool('delete_playlist',
 );
 
 server.tool('build_set',
-  'Curate a DJ set: creates a playlist with the given tracks in order. Use for "build me a 90-min Hi Ibiza set" type requests — Claude picks the tracks (energy progression, era, scene), this saves them as a single playlist the user can play with Smart Shuffle.',
+  'Curate a DJ set as a SAVED PLAYLIST. ONLY use when the user explicitly asks to save, build a playlist, or create a set ("build me a set", "save this", "make a playlist"). For any normal vibe request ("play me Hi Ibiza", "I want chill", "queue some hardtekk"), use play + queue_many instead — do NOT auto-save playlists or the user\'s library fills with one-off vibes.',
   {
     name:        z.string().describe('Playlist name, e.g. "Hi Ibiza 4am 2024"'),
     uris:        z.array(z.string()).describe('Track URIs in playback order — sequence them by energy curve (warmup → peak → wind-down)'),
@@ -905,7 +905,7 @@ server.tool('build_set',
 );
 
 server.tool('build_arc',
-  'Build a multi-mood playlist with energy progression. Pass segments like [{mood: "chill", minutes: 20}, {mood: "focus", minutes: 30}, {mood: "grind", minutes: 30}]. Tool fetches mood-matched tracks for each segment and assembles them in order.',
+  'Build a multi-mood SAVED PLAYLIST with energy progression. ONLY use when the user explicitly asks for a saved arc/set/playlist. Pass segments like [{mood: "chill", minutes: 20}, {mood: "focus", minutes: 30}, {mood: "grind", minutes: 30}]. Do NOT call this for normal vibe requests — those should just queue tracks, not save playlists.',
   {
     name:        z.string().describe('Playlist name'),
     segments:    z.array(z.object({

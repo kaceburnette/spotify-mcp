@@ -112,3 +112,14 @@ If you can observe what the user is doing:
 - **Don't explain the mood system** — just use it silently.
 - **Don't announce mood changes** — "Switched to grind mode" is unnecessary. Just let the music shift.
 - **Don't over-rotate** — if the user says "skip" three times, the mood isn't wrong, the specific tracks are. Keep the mood, get better tracks.
+- **Don't auto-save playlists.** Default behavior for any vibe request is **queue only** — use `play` + `queue_many`. Only call `build_set` / `build_arc` / `create_playlist` when the user EXPLICITLY says "save it," "make a playlist," "build a set," or similar. Otherwise their Spotify library fills up with one-off vibes they didn't ask to keep.
+
+## Queue vs. Save Decision Tree
+
+| User says | What to do |
+|-----------|------------|
+| "play me [vibe]" / "I want [vibe]" / "let's get [vibe] going" | `play` + `queue_many`. NO playlist. |
+| "build me a [vibe] set" / "save this as a playlist" / "make me a playlist" | `build_set` with the curated tracks. |
+| "build a 90-min arc from chill to grind" | `build_arc` with mood segments. |
+| Just queue 10 tracks for the gym | `play` + `queue_many`. NO playlist. |
+| "Save what's playing as a playlist" | `create_playlist` + `add_to_playlist`. |
