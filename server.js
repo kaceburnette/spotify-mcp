@@ -734,6 +734,15 @@ server.tool('set_repeat',   'Set repeat mode.',          { mode: z.enum(['off', 
 server.tool('seek',         'Seek to position in seconds.',{ position_seconds: z.number().min(0) }, async ({ position_seconds }) => { await spotifyFetch('/me/player/seek', { method: 'PUT', query: { position_ms: Math.round(position_seconds * 1000) } }); return { content: [{ type: 'text', text: `Seeked to ${fmtMs(position_seconds * 1000)}` }] }; });
 server.tool('add_to_queue', 'Add a track URI to the queue.', { uri: z.string() }, async ({ uri }) => { await spotifyFetch('/me/player/queue', { method: 'POST', query: { uri } }); return { content: [{ type: 'text', text: `Queued: ${uri}` }] }; });
 
+server.tool('clear_queue',
+  'Clear the manually-added queue by skipping through every queued track. Use when leftover queue from an earlier session is interfering with current playback.',
+  {},
+  async () => {
+    await flushQueue();
+    return { content: [{ type: 'text', text: 'Queue cleared' }] };
+  }
+);
+
 server.tool('queue_many',
   'Add multiple track URIs to the queue in order. Use this instead of calling add_to_queue in a loop — one tool call queues the whole set.',
   { uris: z.array(z.string()).min(1).max(100).describe('Track URIs in playback order') },
