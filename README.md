@@ -2,7 +2,7 @@
 
 Tell Claude your vibe. It plays the music.
 
-48 tools. Auto vibe detection, cold-start auto-launch, smart queue management, DJ set builder, sleep timer, audiobooks & podcasts. Built for Claude Code.
+49 tools. Auto vibe detection, cold-start auto-launch, smart queue management, DJ set builder, sleep timer, audiobooks & podcasts. Built for Claude Code.
 
 ---
 
@@ -155,6 +155,7 @@ Add this to your `~/.claude/CLAUDE.md`:
 | `get_queue` | What's coming up |
 | `add_to_queue` | Queue a specific track |
 | `queue_many` | Queue up to 100 tracks in one call |
+| `clear_queue` | Drain leftover queue from earlier sessions |
 
 ### Sleep Timer
 | Tool | What it does |
